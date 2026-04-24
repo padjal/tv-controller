@@ -1,0 +1,13 @@
+[Unit]
+Description=TV Agent
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/pi-agent
+Restart=always
+RestartSec=5
+EnvironmentFile=/etc/tv-agent/.env
+User=pi
+
+[Install]
+WantedBy=multi-user.target

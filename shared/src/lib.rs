@@ -5,7 +5,7 @@ use uuid::Uuid;
 // ── Device ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../dashboard/src/types/")]
+#[ts(export, export_to = "../../dashboard/src/types/")]
 pub struct Device {
     pub id: Uuid,
     pub name: String,
@@ -16,7 +16,7 @@ pub struct Device {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq)]
-#[ts(export, export_to = "../dashboard/src/types/")]
+#[ts(export, export_to = "../../dashboard/src/types/")]
 pub enum DeviceState {
     Idle,
     Playing,
@@ -27,7 +27,7 @@ pub enum DeviceState {
 // ── Video ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../dashboard/src/types/")]
+#[ts(export, export_to = "../../dashboard/src/types/")]
 pub struct Video {
     pub id: Uuid,
     pub filename: String,
@@ -38,21 +38,21 @@ pub struct Video {
 // ── Commands (server → Pi agent) ──────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../dashboard/src/types/")]
+#[ts(export, export_to = "../../dashboard/src/types/")]
 pub struct PlayCommand {
     pub url: String,
     pub video_id: Uuid,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../dashboard/src/types/")]
+#[ts(export, export_to = "../../dashboard/src/types/")]
 pub struct PlaybackRequest {
     pub device_ids: Vec<Uuid>,
     pub video_id: Uuid,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../dashboard/src/types/")]
+#[ts(export, export_to = "../../dashboard/src/types/")]
 pub struct StopRequest {
     pub device_ids: Vec<Uuid>,
 }
@@ -60,7 +60,7 @@ pub struct StopRequest {
 // ── Agent status (Pi → server) ────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../dashboard/src/types/")]
+#[ts(export, export_to = "../../dashboard/src/types/")]
 pub struct AgentStatus {
     pub state: DeviceState,
     pub current_video_id: Option<Uuid>,
@@ -71,7 +71,7 @@ pub struct AgentStatus {
 // ── Registration (Pi → server on boot) ───────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../dashboard/src/types/")]
+#[ts(export, export_to = "../../dashboard/src/types/")]
 pub struct RegisterRequest {
     pub id: Uuid,
     pub name: String,
@@ -81,15 +81,15 @@ pub struct RegisterRequest {
 // ── SSE envelope (server → dashboard) ────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../dashboard/src/types/")]
+#[ts(export, export_to = "../../dashboard/src/types/")]
 pub struct SseEvent {
     pub kind: SseKind,
-    // commented out because it doesn't implement TS
-    // pub payload: serde_json::Value,
+    #[ts(type = "unknown")]
+    pub payload: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../dashboard/src/types/")]
+#[ts(export, export_to = "../../dashboard/src/types/")]
 pub enum SseKind {
     DeviceUpdated,
     DeviceOffline,
