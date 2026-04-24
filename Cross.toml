@@ -1,0 +1,7 @@
+[build.target.armv7-unknown-linux-gnueabihf]
+# Pi 2/3/4/Zero 2W (ARMv7)
+pre-build = ["apt-get update && apt-get install -y libasound2-dev"]
+
+[build.target.arm-unknown-linux-gnueabihf]
+# Pi 1 B+ / Zero W (ARMv6)
+pre-build = ["apt-get update && apt-get install -y libasound2-dev"]
