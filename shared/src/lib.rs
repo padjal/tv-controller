@@ -84,7 +84,8 @@ pub struct RegisterRequest {
 #[ts(export, export_to = "../dashboard/src/types/")]
 pub struct SseEvent {
     pub kind: SseKind,
-    pub payload: serde_json::Value,
+    // commented out because it doesn't implement TS
+    // pub payload: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
