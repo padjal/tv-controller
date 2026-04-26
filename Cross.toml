@@ -1,5 +1,9 @@
+[build.target.aarch64-unknown-linux-gnu]
+# Pi 5 / Pi 4 (64-bit OS) / Pi 3 (64-bit OS)
+pre-build = ["apt-get update && apt-get install -y libasound2-dev"]
+
 [build.target.armv7-unknown-linux-gnueabihf]
-# Pi 2/3/4/Zero 2W (ARMv7)
+# Pi 2/3/4/Zero 2W (ARMv7, 32-bit OS)
 pre-build = ["apt-get update && apt-get install -y libasound2-dev"]
 
 [build.target.arm-unknown-linux-gnueabihf]

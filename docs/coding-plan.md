@@ -93,7 +93,10 @@ pre-build = ["apt-get update && apt-get install -y libasound2-dev"]
 
 Build commands:
 ```bash
-# For Pi Zero 2W / Pi 4
+# For Pi 5 / Pi 4 (64-bit OS) / Pi 3 (64-bit OS)
+cross build --release --package pi-agent --target aarch64-unknown-linux-gnu
+
+# For Pi 2/3/4/Zero 2W (32-bit OS)
 cross build --release --package pi-agent --target armv7-unknown-linux-gnueabihf
 
 # For Pi 1 B+ / Zero W
