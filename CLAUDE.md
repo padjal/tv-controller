@@ -6,7 +6,7 @@ See `docs/coding-plan.md` for full task breakdown.
 
 ## Current state
 - Phase 1 complete: `shared` crate with all wire types, TS export test passing, 10 `.ts` files in `dashboard/src/types/`
-- Phase 2 complete: `pi-agent` — config, mpv IPC client, axum router, main with registration retry, systemd deploy files
+- Phase 2 complete: `pi-agent` — config, mpv IPC client, axum router, main with registration retry, systemd deploy files. Verified on Pi 5: health, status, play, pause, resume, stop all working over HTTP.
 - Phase 3 (server), Phase 4 (dashboard), Phase 5 (deployment) not started
 
 ## Conventions
@@ -18,9 +18,11 @@ See `docs/coding-plan.md` for full task breakdown.
 
 ## Known issues / decisions
 - mpv IPC request_id matching: see comment in pi-agent/src/mpv.rs line 42
+- mpv must be launched with a valid display or `--vo=null`; when run via SSH without DISPLAY/WAYLAND_DISPLAY set, video output fails silently and mpv stays idle — production systemd service must set the correct display environment
 - Video file serving uses Range headers — tested with mpv, not browser
 - ts-rs 10 resolves `export_to` relative to the source file, not the crate root — use `../../dashboard/src/types/` (not `../`) from `shared/src/lib.rs`
 - `serde_json::Value` does not implement `TS`; annotate fields with `#[ts(type = "unknown")]`
+- reqwest uses `rustls-tls` with `default-features = false` — no OpenSSL dependency
 
 ## Do not
 - Add unwrap() or expect() in non-test code
