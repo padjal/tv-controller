@@ -24,6 +24,16 @@ See `docs/coding-plan.md` for full task breakdown.
 - `serde_json::Value` does not implement `TS`; annotate fields with `#[ts(type = "unknown")]`
 - reqwest uses `rustls-tls` with `default-features = false` — no OpenSSL dependency
 
+## Test scripts
+Bash scripts live in `scripts/test/<component>/`. Run from Git Bash on Windows or directly on the relevant host. All require `curl` and `jq`.
+- `scripts/test/pi-agent/smoke.sh [PI_HOST] [VIDEO_PATH]` — full sequence: health → play → pause → resume → stop
+- `scripts/test/pi-agent/play.sh [PI_HOST] [VIDEO_PATH]` — trigger playback
+- `scripts/test/pi-agent/status.sh [PI_HOST]` — show current state
+
+`PI_HOST` defaults to `192.168.1.11`, `VIDEO_PATH` defaults to `/tmp/test.mp4`. Override via env var or positional arg.
+
+When adding new endpoints in any phase, add a corresponding script here.
+
 ## Do not
 - Add unwrap() or expect() in non-test code
 - Change shared types without regenerating TS files
