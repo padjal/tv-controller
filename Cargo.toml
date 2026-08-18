@@ -20,3 +20,4 @@ dotenvy            = "0.15"
 percent-encoding   = "2"
 notify             = "6"
 futures            = "0.3"
+tower-http         = { version = "0.5", features = ["fs"] }

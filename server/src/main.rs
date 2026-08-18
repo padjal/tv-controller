@@ -48,10 +48,7 @@ async fn main() -> Result<()> {
         services::heartbeat::build_client()?,
     ));
 
-    // Static file serving (dashboard + /videos) arrives with Task 3.10.
-    let app = axum::Router::new()
-        .nest("/api", router::api_router())
-        .with_state(state);
+    let app = router::app(state);
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr)

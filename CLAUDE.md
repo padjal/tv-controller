@@ -7,7 +7,7 @@ See `docs/coding-plan.md` for full task breakdown.
 ## Current state
 - Phase 1 complete: `shared` crate with all wire types, TS export test passing, 10 `.ts` files in `dashboard/src/types/`
 - Phase 2 complete: `pi-agent` — config, mpv IPC client, axum router, main with registration retry, systemd deploy files. Verified on Pi 5: health, status, play, pause, resume, stop all working over HTTP.
-- Phase 3 (server) in progress: 3.1 db, 3.2 AppState, 3.3 video_scan, 3.4 fan_out, 3.5 heartbeat, 3.6 device handlers done. Next: 3.7 video handlers. `main` serves `/api` on `PORT` (default 8000) and runs the scanner + heartbeat; static file serving lands in 3.10.
+- Phase 3 (server) in progress: 3.1 db, 3.2 AppState, 3.3 video_scan, 3.4 fan_out, 3.5 heartbeat, 3.6 device handlers, 3.7 video handlers done. Next: 3.8 playback handlers. `main` serves `/api` on `PORT` (default 8000) and runs the scanner + heartbeat; static file serving lands in 3.10.
 - Phase 4 (dashboard), Phase 5 (deployment) not started
 
 ## Conventions
@@ -20,7 +20,8 @@ See `docs/coding-plan.md` for full task breakdown.
 ## Known issues / decisions
 - mpv IPC request_id matching: see comment in pi-agent/src/mpv.rs line 42
 - mpv must be launched with a valid display or `--vo=null`; when run via SSH without DISPLAY/WAYLAND_DISPLAY set, video output fails silently and mpv stays idle — production systemd service must set the correct display environment
-- Video file serving uses Range headers — tested with mpv, not browser
+- Video file serving is `tower_http::services::ServeDir` mounted at `/videos` in `server/src/router.rs` — Range, Content-Type, HEAD, conditional requests and `..` rejection all come from it. Range behaviour is covered by tests (206, open-ended, suffix, 416) and by `scripts/test/server/videos.sh`; still not exercised from a real browser
+- `ServeDir` serves anything in `videos_dir`, not just video extensions — keep non-video files out of that directory
 - ts-rs 10 resolves `export_to` relative to the source file, not the crate root — use `../../dashboard/src/types/` (not `../`) from `shared/src/lib.rs`
 - `serde_json::Value` does not implement `TS`; annotate fields with `#[ts(type = "unknown")]`
 - reqwest uses `rustls-tls` with `default-features = false` — no OpenSSL dependency
@@ -42,8 +43,8 @@ Bash scripts live in `scripts/test/<component>/`. Run from Git Bash on Windows o
 - `scripts/test/pi-agent/smoke.sh [PI_HOST] [VIDEO_PATH]` — full sequence: health → play → pause → resume → stop
 - `scripts/test/pi-agent/play.sh [PI_HOST] [VIDEO_PATH]` — trigger playback
 - `scripts/test/pi-agent/status.sh [PI_HOST]` — show current state
-
 - `scripts/test/server/devices.sh [SERVER_HOST]` — register (twice, for idempotency) → list → get → 404 → 400 → delete
+- `scripts/test/server/videos.sh [SERVER_HOST]` — list → metadata → file download → Range → 416 → 404. Needs a video in `VIDEOS_DIR`; skips file tests if the library is empty
 
 `PI_HOST` defaults to `192.168.1.11`, `VIDEO_PATH` defaults to `/tmp/test.mp4`, `SERVER_HOST` defaults to `127.0.0.1` (port 8000). Override via env var or positional arg.
 
