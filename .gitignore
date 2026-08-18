@@ -1,5 +1,7 @@
 /target
 .idea/
+# Claude Code local settings and its worktree checkouts.
+.claude/
 .env
 *.db
 *.db-wal
