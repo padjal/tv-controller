@@ -17,3 +17,6 @@ server/dashboard/
 /videos/*
 !/videos/.gitkeep
 /data/
+# Pre-transcode originals kept by scripts/transcode.sh. Large, and the Pis
+# never read them — only the delivery encodes in /videos are served.
+/masters/
