@@ -155,12 +155,23 @@ impl MpvClient {
     /// `loop-file` is set *before* `loadfile`, not after: it is a global
     /// property that outlives any one file, and setting it first means even a
     /// very short clip cannot reach its end in the gap between the two
-    /// commands. Both are separate IPC round trips because each `send_command`
-    /// opens its own connection.
+    /// commands. Each `send_command` opens its own connection, so all three
+    /// are separate IPC round trips.
+    ///
+    /// `pause` is cleared *after* `loadfile`, and clearing it is not optional.
+    /// Like `loop-file` it is a global property that outlives the file it was
+    /// set on, and `stop` does not reset it — so pause, stop, play left the
+    /// flag set and the next video loaded and then sat on its first frame,
+    /// looking like a dead player until someone pressed space on the Pi.
+    /// After rather than before, because setting it while the previous file is
+    /// still loaded resumes *that* file for the moment before `loadfile`
+    /// replaces it, flashing the old content onto the screen.
     pub async fn play(&self, url: &str) -> Result<()> {
         self.send_command(serde_json::json!({"command": ["set_property", "loop-file", "inf"]}))
             .await?;
         self.send_command(serde_json::json!({"command": ["loadfile", url, "replace"]}))
+            .await?;
+        self.send_command(serde_json::json!({"command": ["set_property", "pause", false]}))
             .await?;
         Ok(())
     }
@@ -347,7 +358,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn play_loops_the_file_and_sets_the_loop_before_loading() {
+    async fn play_arms_the_loop_loads_then_clears_pause() {
         let path = socket_path("loop");
         let seen = recording_mpv(path.clone());
 
@@ -360,8 +371,11 @@ mod tests {
             vec![
                 serde_json::json!(["set_property", "loop-file", "inf"]),
                 serde_json::json!(["loadfile", "http://server:8000/videos/promo.mp4", "replace"]),
+                serde_json::json!(["set_property", "pause", false]),
             ],
-            "play must arm the loop before loading, or a short clip can end first"
+            "play must arm the loop before loading (a short clip can otherwise end \
+             first) and clear pause after (clearing it before resumes the outgoing \
+             file for a moment, flashing old content)"
         );
         let _ = std::fs::remove_file(&path);
     }
