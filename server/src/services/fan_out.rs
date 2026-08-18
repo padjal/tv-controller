@@ -15,7 +15,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use futures::future::join_all;
 use serde::Serialize;
-use shared::{Device, PlayCommand};
+use shared::{Device, DeviceState, PlayCommand};
 use uuid::Uuid;
 
 use super::agent_base_url;
@@ -24,6 +24,20 @@ use super::agent_base_url;
 /// not answered in this long is treated as failed for this command; the
 /// heartbeat decides whether it is actually offline.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A much tighter ceiling for devices the heartbeat has already marked Offline.
+///
+/// The fan-out is concurrent, so a command takes as long as its slowest device
+/// — one unplugged TV in a selection would otherwise freeze the dashboard for
+/// the full [`REQUEST_TIMEOUT`] while the working TVs have already started.
+/// A device already known to be gone does not deserve that much patience.
+///
+/// Deliberately only applied here, not in the heartbeat: detecting that an
+/// agent has come back needs the full timeout, so a slow-but-alive Pi on
+/// congested Wi-Fi is not written off. The worst case here is that a TV which
+/// recovered moments ago misses one command; the heartbeat brings it back
+/// within a poll and the operator can retry.
+pub const OFFLINE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Agent error bodies are echoed into our logs — keep them bounded.
 const MAX_ERROR_BODY: usize = 200;
@@ -87,11 +101,16 @@ async fn post_one<B: Serialize>(
 ) -> Result<()> {
     let url = format!("{}/{endpoint}", agent_base_url(&device.ip));
 
-    // Requests are bounded by the client's own timeout rather than a per-request
-    // one, so a caller that wants a tighter bound (the heartbeat polls far more
-    // often than a playback command) can set it. Build clients with
-    // `build_client` to get REQUEST_TIMEOUT.
-    let response = client.post(&url).json(body).send().await.with_context(|| {
+    // Requests are otherwise bounded by the client's own timeout, so a caller
+    // that wants a tighter bound (the heartbeat polls far more often than a
+    // playback command) can set it. Build clients with `build_client` to get
+    // REQUEST_TIMEOUT.
+    let mut request = client.post(&url).json(body);
+    if device.state == DeviceState::Offline {
+        request = request.timeout(OFFLINE_TIMEOUT);
+    }
+
+    let response = request.send().await.with_context(|| {
         format!(
             "{} ({}) did not answer POST /{endpoint}",
             device.name, device.ip
@@ -139,11 +158,15 @@ mod tests {
     const FAILING_IP: &str = "10.0.0.99";
 
     fn device(name: &str, ip: &str) -> Device {
+        device_in(name, ip, DeviceState::Idle)
+    }
+
+    fn device_in(name: &str, ip: &str, state: DeviceState) -> Device {
         Device {
             id: Uuid::new_v4(),
             name: name.to_string(),
             ip: ip.to_string(),
-            state: DeviceState::Idle,
+            state,
             current_video: None,
             last_seen: 0,
         }
@@ -369,6 +392,79 @@ mod tests {
         assert!(
             elapsed < Duration::from_secs(2),
             "gave up after {elapsed:?}; the client's 250ms timeout was not honoured"
+        );
+    }
+
+    /// A TV the heartbeat has already written off must not hold the whole
+    /// command hostage for REQUEST_TIMEOUT while the working TVs wait.
+    #[tokio::test]
+    async fn an_offline_device_gives_up_quickly() {
+        let router = Router::new().route(
+            "/stop",
+            post(|| async {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                Json(serde_json::json!({ "ok": true }))
+            }),
+        );
+        let addr = stub_agent(router).await;
+
+        // Client timeout far longer than OFFLINE_TIMEOUT, so only the
+        // per-request override can end this.
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .proxy(reqwest::Proxy::all(format!("http://{addr}")).unwrap())
+            .build()
+            .unwrap();
+
+        let offline = device_in("TV-GONE", "10.0.0.1", DeviceState::Offline);
+        let started = std::time::Instant::now();
+        let results = fan_out_stop(&[offline], &client).await;
+        let elapsed = started.elapsed();
+
+        assert!(results[0].1.is_err());
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "offline device took {elapsed:?}; the short timeout was not applied"
+        );
+    }
+
+    /// The short timeout must not stop a TV that has come back from accepting
+    /// commands before the heartbeat has noticed it recovered.
+    #[tokio::test]
+    async fn an_offline_device_that_answers_still_succeeds() {
+        let router = Router::new().route(
+            "/play",
+            post(|| async { Json(serde_json::json!({ "ok": true })) }),
+        );
+        let addr = stub_agent(router).await;
+
+        let recovered = device_in("TV-BACK", "10.0.0.1", DeviceState::Offline);
+        let results = fan_out_play(&[recovered], &play_command(), &client_via(addr)).await;
+
+        assert!(results[0].1.is_ok(), "{:?}", results[0].1);
+    }
+
+    /// One dead TV must not shorten the patience given to a live one.
+    #[tokio::test]
+    async fn a_live_device_keeps_the_full_timeout() {
+        const DELAY: Duration = Duration::from_millis(1500);
+        let router = Router::new().route(
+            "/stop",
+            post(|| async {
+                tokio::time::sleep(DELAY).await;
+                Json(serde_json::json!({ "ok": true }))
+            }),
+        );
+        let addr = stub_agent(router).await;
+
+        // Slower than OFFLINE_TIMEOUT, well inside REQUEST_TIMEOUT.
+        let live = device_in("TV-SLOW", "10.0.0.1", DeviceState::Playing);
+        let results = fan_out_stop(&[live], &client_via(addr)).await;
+
+        assert!(
+            results[0].1.is_ok(),
+            "a live but slow TV was cut off: {:?}",
+            results[0].1
         );
     }
 

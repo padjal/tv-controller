@@ -1,0 +1,40 @@
+# Server deployment. Run from the repo root:
+#
+#   cp .env.example .env     # then set SERVER_BASE_URL
+#   docker compose up -d --build
+#
+# The Pi agents are NOT deployed from here — see scripts/deploy_agent.sh.
+
+services:
+  server:
+    build: .
+    image: tv-controller-server
+    container_name: tv-controller
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      # Required. The address the Pi agents use to reach this machine: it is
+      # baked into the video URLs they fetch, so localhost or 127.0.0.1 will
+      # leave every playback request failing on the Pi rather than here.
+      SERVER_BASE_URL: ${SERVER_BASE_URL:?set SERVER_BASE_URL in .env, e.g. http://192.168.1.10:8000}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      # Your video library. Read-only: the server only ever reads these, and
+      # ro sidesteps the host-vs-container ownership mismatch. Keep it flat —
+      # scanning is non-recursive and filenames must be unique.
+      - ./videos:/app/videos:ro
+      # The SQLite database, in a named volume so it is owned by the container
+      # user without any chown on the host. Back it up with:
+      #   docker compose exec server cat /app/data/tv-controller.db > backup.db
+      - tv-controller-data:/app/data
+    restart: unless-stopped
+    # The API answers before the scanner finishes, so this is a real check.
+    healthcheck:
+      test: ["CMD", "sh", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000 && printf 'GET /api/devices HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q 200"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  tv-controller-data:

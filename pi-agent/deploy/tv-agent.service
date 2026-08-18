@@ -1,6 +1,7 @@
 [Unit]
 Description=TV Agent
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 ExecStart=/usr/local/bin/pi-agent
@@ -8,6 +9,21 @@ Restart=always
 RestartSec=5
 EnvironmentFile=/etc/tv-agent/.env
 User=pi
+
+# The agent spawns mpv itself, so mpv inherits this environment. On Pi OS Lite
+# there is no session bus or display: mpv renders through KMS/DRM, configured
+# in ~/.config/mpv/mpv.conf by scripts/setup_pi.sh. XDG_RUNTIME_DIR is still
+# needed for mpv's own runtime files.
+Environment=HOME=/home/pi
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+
+# On a DESKTOP install, uncomment the line matching your session instead —
+# without it mpv accepts commands and silently plays to nothing.
+#Environment=DISPLAY=:0
+#Environment=WAYLAND_DISPLAY=wayland-0
+
+# mpv is a child process; kill it too when the unit stops or restarts.
+KillMode=control-group
 
 [Install]
 WantedBy=multi-user.target

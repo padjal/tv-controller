@@ -10,3 +10,8 @@ node_modules/
 dist/
 # vite build output, served by the server at runtime
 server/dashboard/
+
+# Video library and container data live here but are not part of the repo.
+/videos/*
+!/videos/.gitkeep
+/data/

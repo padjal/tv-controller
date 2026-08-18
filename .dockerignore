@@ -1,0 +1,20 @@
+# Build artifacts — the image builds its own.
+target/
+dashboard/node_modules/
+dashboard/dist/
+server/dashboard/dist/
+
+# Local state that must never be baked into an image.
+.env
+*/.env
+*.db
+*.db-shm
+*.db-wal
+data/
+videos/
+
+.git/
+.gitignore
+docs/
+scripts/
+*.md
