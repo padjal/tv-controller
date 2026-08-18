@@ -29,8 +29,11 @@ services:
       - tv-controller-data:/app/data
     restart: unless-stopped
     # The API answers before the scanner finishes, so this is a real check.
+    # bash, not sh: /bin/sh is dash in bookworm-slim and has no /dev/tcp, so
+    # the sh form fails with "Directory nonexistent" and the container would
+    # never report healthy. The image ships no curl or wget to use instead.
     healthcheck:
-      test: ["CMD", "sh", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000 && printf 'GET /api/devices HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q 200"]
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000 && printf 'GET /api/devices HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q 200"]
       interval: 30s
       timeout: 5s
       retries: 3
