@@ -1,12 +1,12 @@
 import { useCallback, useState } from "react";
+import { CommandBar } from "./components/CommandBar";
 import { TVGrid } from "./components/TVGrid";
 import { VideoLibrary } from "./components/VideoLibrary";
 
 /**
  * Owns the selection that CommandBar acts on. Device and video lists live in
- * the components that render them.
- *
- * CommandBar arrives in task 4.5.
+ * the components that render them, each kept current by its own SSE
+ * subscription — so a command's effects show up without any refresh here.
  */
 export function App() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -39,6 +39,8 @@ export function App() {
         <TVGrid selectedIds={selectedIds} onToggle={toggle} />
         <VideoLibrary selectedVideoId={selectedVideoId} onSelect={selectVideo} />
       </div>
+
+      <CommandBar selectedIds={selectedIds} selectedVideoId={selectedVideoId} />
     </main>
   );
 }

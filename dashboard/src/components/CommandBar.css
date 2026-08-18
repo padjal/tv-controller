@@ -1,0 +1,99 @@
+.commandbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.commandbar__inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  max-width: 90rem;
+  margin: 0 auto;
+  padding: 0.7rem 1.25rem;
+}
+
+.commandbar__summary {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.commandbar__buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.commandbar__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.4rem;
+  background: var(--surface-raised);
+  color: inherit;
+  cursor: pointer;
+}
+
+.commandbar__button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.commandbar__button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.commandbar__button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.commandbar__spinner {
+  width: 0.8em;
+  height: 0.8em;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: commandbar-spin 700ms linear infinite;
+}
+
+@keyframes commandbar-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .commandbar__spinner {
+    animation-duration: 2s;
+  }
+}
+
+.commandbar__toast {
+  margin: 0;
+  padding: 0.55rem 1.25rem;
+  font-size: 0.85rem;
+  border-top: 1px solid var(--line);
+}
+
+.commandbar__toast--success {
+  color: var(--state-playing);
+}
+
+.commandbar__toast--partial {
+  color: var(--state-paused);
+}
+
+.commandbar__toast--error {
+  color: var(--danger);
+}

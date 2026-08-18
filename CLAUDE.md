@@ -8,8 +8,8 @@ See `docs/coding-plan.md` for full task breakdown.
 - Phase 1 complete: `shared` crate with all wire types, TS export test passing, 10 `.ts` files in `dashboard/src/types/`
 - Phase 2 complete: `pi-agent` — config, mpv IPC client, axum router, main with registration retry, systemd deploy files. Verified on Pi 5: health, status, play, pause, resume, stop all working over HTTP.
 - Phase 3 complete: server — db, AppState, video_scan, fan_out, heartbeat, device/video/playback/SSE handlers, router and main. 95 tests. Verified live: all three `scripts/test/server/*.sh` suites pass against a running server, SSE carries events from all four sources, SIGTERM shuts down cleanly. `main` serves `/api` on `PORT` (default 8000) and runs the scanner + heartbeat; static file serving lands in 3.10.
-- Phase 4 (dashboard) in progress: 4.1 `useSSE.ts`, 4.2 `api.ts`, 4.3 `TVGrid.tsx`, 4.4 `VideoLibrary.tsx` done, 4.6 build integration done early (needed to verify the rest). 52 tests. Next: 4.5 CommandBar, which is the last of the phase.
-- Phase 5 (deployment) not started.
+- Phase 4 complete: dashboard — `useSSE`, `api.ts`, TVGrid, VideoLibrary, CommandBar, build integration. 69 tests. Built output is served by the Rust server; playback drives real agents end to end.
+- Phase 5 (deployment) not started — `scripts/setup_pi.sh`, `scripts/deploy_agent.sh`, `docker-compose.yml`.
 
 ## Conventions
 - All errors use `anyhow::Result` — no unwrap() outside tests
@@ -52,6 +52,9 @@ See `docs/coding-plan.md` for full task breakdown.
 - The dashboard UI has never been opened in a real browser — tests are jsdom, so behaviour is covered but visual layout is not
 - `VideoLibrary` uses native radio inputs (visually hidden, row styled via `:focus-within`) so single-select, arrow-key navigation and screen-reader announcement come for free
 - `VideoLibrary` clears the selection when the selected file is pruned from disk, but only once a fetch has succeeded — an empty list while loading or after an error is not evidence the file is gone, and clearing on that wipes the selection on every remount
+- `CommandBar` disables every button while a command is in flight, so two commands cannot race to set the same device's state
+- `CommandBar` has a "Play on all" button that is not in the plan's button list; without it `/api/playback/play-all` would be unreachable from the UI. It needs only a video, since the server picks the targets
+- Command results are reported per device: "Playing on 4 of 5" plus the server's error strings, which already name the failing TV. This is why `api.ts` returns the body on a 502 instead of throwing
 - Server assumes every agent is on port 8080 (`AGENT_PORT` in `server/src/services/mod.rs`); `devices` has no port column, so an agent moved off the default is unreachable
 - Heartbeat broadcasts only when a device's state or current video actually changes, not every 10s tick — `last_seen` is still persisted each round
 - A device is marked Offline only after 30s of silence, and announced once; `last_seen` is left at its old value so it records when the device was last actually seen
