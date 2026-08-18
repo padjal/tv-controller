@@ -10,6 +10,11 @@
 # Usage:
 #   sudo ./setup_pi.sh                 # run user defaults to pi
 #   sudo RUN_USER=tv ./setup_pi.sh
+#   sudo SESSION=lite ./setup_pi.sh    # force the display mode, skipping detection
+#
+# SESSION is auto-detected (lite | wayland | x11) and decides both the mpv
+# output configuration and the display variable in the systemd unit. Override
+# it when provisioning a card for a machine other than the one you are on.
 #
 # After running:
 #   1. edit /etc/tv-agent/.env  (SERVER_URL, DEVICE_NAME)
@@ -67,6 +72,57 @@ else
   warn "Edit $CONF_DIR/.env — SERVER_URL and DEVICE_NAME are placeholders"
 fi
 
+step "Detecting the display session"
+# Which display the agent's mpv should render to is the single most common
+# thing to get wrong, and it fails silently: mpv accepts every command and
+# plays to nothing. Detect it rather than leaving it to a commented-out line.
+RUN_UID="$(id -u "$RUN_USER")"
+
+detect_session() {
+  local uid="$1" sock x
+  # A live Wayland compositor leaves a socket here. The name is not always
+  # wayland-0 — a restart or a second compositor gives wayland-1.
+  for sock in /run/user/"$uid"/wayland-*; do
+    [[ -S "$sock" ]] || continue          # skips the .lock file
+    printf 'wayland:%s\n' "${sock##*/}"
+    return
+  done
+  # X11: /tmp/.X11-unix/X<n> means DISPLAY=:<n>
+  for x in /tmp/.X11-unix/X*; do
+    [[ -S "$x" ]] || continue
+    printf 'x11::%s\n' "${x##*/X}"
+    return
+  done
+  printf 'lite:\n'
+}
+
+SESSION="${SESSION:-auto}"
+if [[ "$SESSION" == "auto" ]]; then
+  detected="$(detect_session "$RUN_UID")"
+  SESSION_KIND="${detected%%:*}"
+  SESSION_ADDR="${detected#*:}"
+  if [[ "$SESSION_KIND" == "lite" ]] \
+     && [[ "$(systemctl get-default 2>/dev/null)" == "graphical.target" ]]; then
+    warn "No display session found, but the default target is graphical.target."
+    warn "If this is a desktop install, start the session and re-run, or pass"
+    warn "SESSION=wayland (or SESSION=x11) — otherwise mpv will render to nothing."
+  fi
+else
+  SESSION_KIND="$SESSION"
+  case "$SESSION_KIND" in
+    wayland) SESSION_ADDR="${SESSION_ADDR:-wayland-0}" ;;
+    x11)     SESSION_ADDR="${SESSION_ADDR:-:0}" ;;
+    lite)    SESSION_ADDR="" ;;
+    *) echo "SESSION must be one of: auto, lite, wayland, x11" >&2; exit 1 ;;
+  esac
+fi
+
+case "$SESSION_KIND" in
+  wayland) echo "Wayland session, WAYLAND_DISPLAY=$SESSION_ADDR" ;;
+  x11)     echo "X11 session, DISPLAY=$SESSION_ADDR" ;;
+  lite)    echo "No desktop session — mpv will drive KMS/DRM directly" ;;
+esac
+
 step "Configuring mpv output"
 # The agent spawns a bare `mpv --input-ipc-server=... --idle=yes --no-terminal`
 # with no video-output flags, so output is configured here rather than in code.
@@ -76,32 +132,52 @@ MPV_CONF_DIR="$USER_HOME/.config/mpv"
 mkdir -p "$MPV_CONF_DIR"
 if [[ -f "$MPV_CONF_DIR/mpv.conf" ]]; then
   echo "$MPV_CONF_DIR/mpv.conf already exists — leaving it alone"
+  # A Lite-shaped config on a desktop install is the silent-playback trap: the
+  # compositor already holds DRM, so mpv cannot get it and renders nowhere.
+  if [[ "$SESSION_KIND" != "lite" ]] \
+     && grep -qE '^[[:space:]]*gpu-context=drm' "$MPV_CONF_DIR/mpv.conf"; then
+    warn "That file sets gpu-context=drm, but a $SESSION_KIND session is running."
+    warn "Comment out vo=gpu and gpu-context=drm, or playback will render to nothing."
+  fi
 else
-  cat > "$MPV_CONF_DIR/mpv.conf" <<'MPVCONF'
-# Written by scripts/setup_pi.sh.
-#
-# Pi OS Lite (no desktop): render straight to the display via KMS/DRM.
-# On a desktop install, comment the next two lines out — the session's
-# DISPLAY/WAYLAND_DISPLAY (set in the systemd unit) takes over.
-vo=gpu
-gpu-context=drm
-
-fullscreen=yes
-# A signage screen should not show mpv's overlay or stop at end of file.
-osc=no
-osd-level=0
-keep-open=yes
-MPVCONF
+  {
+    echo "# Written by scripts/setup_pi.sh for a $SESSION_KIND session."
+    echo "#"
+    if [[ "$SESSION_KIND" == "lite" ]]; then
+      echo "# No desktop session: render straight to the display via KMS/DRM."
+      echo "# If you install a desktop later, comment these two out."
+      echo "vo=gpu"
+      echo "gpu-context=drm"
+    else
+      echo "# A $SESSION_KIND session is running, so mpv renders into it and picks"
+      echo "# its own output. Forcing vo/gpu-context here would fight the compositor."
+    fi
+    echo ""
+    echo "fullscreen=yes"
+    echo "# A signage screen should not show mpv's overlay or stop at end of file."
+    echo "osc=no"
+    echo "osd-level=0"
+    echo "keep-open=yes"
+  } > "$MPV_CONF_DIR/mpv.conf"
+  echo "Wrote $MPV_CONF_DIR/mpv.conf for a $SESSION_KIND session"
 fi
 chown -R "$RUN_USER":"$RUN_USER" "$USER_HOME/.config"
 
 step "Installing the systemd unit"
 # The shipped unit is written for the default `pi` account; User, HOME and
 # XDG_RUNTIME_DIR all have to agree with whoever actually runs it.
-RUN_UID="$(id -u "$RUN_USER")"
-sed -e "s|^User=.*|User=$RUN_USER|" \
-    -e "s|^Environment=HOME=.*|Environment=HOME=$USER_HOME|" \
-    -e "s|^Environment=XDG_RUNTIME_DIR=.*|Environment=XDG_RUNTIME_DIR=/run/user/$RUN_UID|" \
+# The shipped unit ships both display lines commented out; uncomment whichever
+# matches the session detected above, and leave the other alone.
+SED_ARGS=(
+  -e "s|^User=.*|User=$RUN_USER|"
+  -e "s|^Environment=HOME=.*|Environment=HOME=$USER_HOME|"
+  -e "s|^Environment=XDG_RUNTIME_DIR=.*|Environment=XDG_RUNTIME_DIR=/run/user/$RUN_UID|"
+)
+case "$SESSION_KIND" in
+  wayland) SED_ARGS+=(-e "s|^#\?Environment=WAYLAND_DISPLAY=.*|Environment=WAYLAND_DISPLAY=$SESSION_ADDR|") ;;
+  x11)     SED_ARGS+=(-e "s|^#\?Environment=DISPLAY=.*|Environment=DISPLAY=$SESSION_ADDR|") ;;
+esac
+sed "${SED_ARGS[@]}" \
     "$REPO_DIR/pi-agent/deploy/tv-agent.service" \
   > /etc/systemd/system/tv-agent.service
 systemctl daemon-reload
@@ -125,4 +201,5 @@ Done. Next:
   5. sudo shutdown -h now, then image the card
 
 Note: group membership (video/render) only applies after a reboot.
+Display: $SESSION_KIND${SESSION_ADDR:+ ($SESSION_ADDR)} — re-run with SESSION=... to change.
 DONE

@@ -97,11 +97,39 @@ sudo ./scripts/setup_pi.sh
 
 This installs `mpv`, adds the run user to the `video`, `render` and `audio`
 groups, creates `/etc/tv-agent`, installs the systemd unit, writes an
-`mpv.conf` that renders fullscreen through KMS/DRM, and disables console
-blanking. It does *not* install the agent binary — that comes from your
-workstation, so the SD card can be imaged before the binary is final.
+`mpv.conf`, and disables console blanking. It does *not* install the agent
+binary — that comes from your workstation, so the SD card can be imaged before
+the binary is final.
 
 Pass `RUN_USER=someone` if the agent should not run as `pi`.
+
+**It detects the display session** and configures both files to match, because
+getting this wrong is the failure that costs the most time — mpv accepts every
+command and plays to nothing. It reports what it found:
+
+```
+== Detecting the display session
+Wayland session, WAYLAND_DISPLAY=wayland-0
+```
+
+| Detected | `mpv.conf` | systemd unit |
+| --- | --- | --- |
+| `lite` (no session) | `vo=gpu`, `gpu-context=drm` | neither display line set |
+| `wayland` | no `vo`/`gpu-context` | `WAYLAND_DISPLAY=<socket>` |
+| `x11` | no `vo`/`gpu-context` | `DISPLAY=:<n>` |
+
+Detection reads the live session: a socket in `/run/user/<uid>/wayland-*`, else
+`/tmp/.X11-unix/X<n>`, else Lite. The Wayland socket is not always `wayland-0`,
+so the real name is used.
+
+Override it with `SESSION=lite|wayland|x11` — needed when you provision a card
+for a machine other than the one you are on, or when the desktop session is not
+running yet. If no session is found but the default target is
+`graphical.target`, the script warns rather than silently choosing Lite.
+
+An existing `mpv.conf` is never overwritten. If it sets `gpu-context=drm` while
+a desktop session is running, the script warns — that combination cannot work,
+since the compositor already holds DRM.
 
 **2. Configure it**
 
@@ -189,10 +217,12 @@ in the systemd unit's environment.
 - **Pi OS Lite**: the generated `mpv.conf` uses `vo=gpu` with
   `gpu-context=drm`. Nothing else may hold the display — if you also run a
   desktop session or another mpv, DRM is already taken.
-- **Pi OS Desktop**: comment out the `vo`/`gpu-context` lines in `mpv.conf` and
-  uncomment the matching `DISPLAY` or `WAYLAND_DISPLAY` line in
-  `/etc/systemd/system/tv-agent.service`, then
-  `sudo systemctl daemon-reload && sudo systemctl restart tv-agent`.
+- **Pi OS Desktop**: `setup_pi.sh` configures this for you when a session is
+  running. If it ran before the desktop started, re-run it (or pass
+  `SESSION=wayland` / `SESSION=x11`), then
+  `sudo systemctl daemon-reload && sudo systemctl restart tv-agent`. To check
+  what the service actually got:
+  `systemctl show tv-agent -p Environment --value`.
 
 To confirm it is a display problem rather than a delivery problem, SSH in and
 run `mpv --vo=null <url>` by hand: if that plays, the file and the network are
