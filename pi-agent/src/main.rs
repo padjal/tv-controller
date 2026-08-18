@@ -13,7 +13,19 @@ async fn main() -> Result<()> {
 
     let config = config::Config::load()?;
     let mpv = Arc::new(mpv::MpvClient::new("/tmp/mpvsocket"));
-    mpv.ensure_running().await?;
+    // Starting mpv is best-effort: the agent has to come up even when mpv does
+    // not. A Pi whose display is not ready yet, or whose mpv is missing or
+    // wedged, would otherwise exit here — and under `Restart=always` that is a
+    // crash loop in which the TV never appears on the dashboard at all, since
+    // nothing is left listening to answer /health or /status. The operator
+    // sees a device that vanished rather than one reporting a real error.
+    //
+    // Carrying on costs nothing: `handle_play` calls `ensure_running` before
+    // every play, so the first play once mpv is available spawns it, and until
+    // then each command fails with the actual reason.
+    if let Err(e) = mpv.ensure_running().await {
+        warn!("mpv unavailable at startup: {e:#} — serving anyway, the next play will retry");
+    }
 
     let ip = get_local_ip().unwrap_or_else(|| "unknown".to_string());
     let register_body = RegisterRequest {
