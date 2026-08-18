@@ -7,7 +7,7 @@ See `docs/coding-plan.md` for full task breakdown.
 ## Current state
 - Phase 1 complete: `shared` crate with all wire types, TS export test passing, 10 `.ts` files in `dashboard/src/types/`
 - Phase 2 complete: `pi-agent` — config, mpv IPC client, axum router, main with registration retry, systemd deploy files. Verified on Pi 5: health, status, play, pause, resume, stop all working over HTTP.
-- Phase 3 (server) in progress: 3.1 db, 3.2 AppState, 3.3 video_scan done. Next: 3.4 fan_out. No router or handlers yet — `main` currently starts the scanner and nothing else.
+- Phase 3 (server) in progress: 3.1 db, 3.2 AppState, 3.3 video_scan, 3.4 fan_out, 3.5 heartbeat done. Next: 3.6 device handlers. No router or handlers yet — `main` currently starts the scanner and heartbeat and nothing else.
 - Phase 4 (dashboard), Phase 5 (deployment) not started
 
 ## Conventions
@@ -28,7 +28,12 @@ See `docs/coding-plan.md` for full task breakdown.
 - `ffprobe` is optional: if it is missing, videos are still indexed and playable, just with `duration_secs = NULL`. The warning is logged once, not per file
 - ffprobe reports `format.duration` as a JSON *string* ("30.024000"), and omits it entirely for some containers — see `parse_duration_secs` in `server/src/services/video_scan.rs`
 - Video scanning is non-recursive and prunes rows whose file is gone; `videos_dir` must stay flat because `filename` is UNIQUE and the serve route is `/videos/:filename`
-- `db.rs` and `state.rs` carry a module-level `#![allow(dead_code)]` while Phase 3 is incomplete — remove both once the handlers land
+- `db.rs`, `state.rs`, `fan_out.rs` and `heartbeat.rs` carry a module-level `#![allow(dead_code)]` while Phase 3 is incomplete — remove them once the handlers land
+- Server assumes every agent is on port 8080 (`AGENT_PORT` in `server/src/services/mod.rs`); `devices` has no port column, so an agent moved off the default is unreachable
+- Heartbeat broadcasts only when a device's state or current video actually changes, not every 10s tick — `last_seen` is still persisted each round
+- A device is marked Offline only after 30s of silence, and announced once; `last_seen` is left at its old value so it records when the device was last actually seen
+- The stale-`Playing`-after-reboot case (registration preserves playback state) is corrected by the heartbeat within one poll — covered by a test in `heartbeat.rs`
+- Agents report `current_video_id` (a Uuid) but `devices.current_video` stores the filename the dashboard displays, so the heartbeat resolves ids via one `list_videos` query per round
 
 ## Test scripts
 Bash scripts live in `scripts/test/<component>/`. Run from Git Bash on Windows or directly on the relevant host. All require `curl` and `jq`.

@@ -10,7 +10,6 @@
 //! Remove it once the phase is complete.
 #![allow(dead_code)]
 
-use std::net::IpAddr;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -19,7 +18,7 @@ use serde::Serialize;
 use shared::{Device, PlayCommand};
 use uuid::Uuid;
 
-use super::AGENT_PORT;
+use super::agent_base_url;
 
 /// Default per-request ceiling, applied by [`build_client`]. An agent that has
 /// not answered in this long is treated as failed for this command; the
@@ -113,15 +112,6 @@ async fn post_one<B: Serialize>(
     }
 
     Ok(())
-}
-
-/// `http://host:8080`, bracketing the host if it is an IPv6 literal.
-fn agent_base_url(ip: &str) -> String {
-    match ip.parse::<IpAddr>() {
-        Ok(IpAddr::V6(addr)) => format!("http://[{addr}]:{AGENT_PORT}"),
-        // Hostnames and IPv4 both work unbracketed.
-        _ => format!("http://{ip}:{AGENT_PORT}"),
-    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -380,13 +370,6 @@ mod tests {
             elapsed < Duration::from_secs(2),
             "gave up after {elapsed:?}; the client's 250ms timeout was not honoured"
         );
-    }
-
-    #[test]
-    fn agent_url_brackets_ipv6_literals() {
-        assert_eq!(agent_base_url("192.168.1.11"), "http://192.168.1.11:8080");
-        assert_eq!(agent_base_url("tv-01.local"), "http://tv-01.local:8080");
-        assert_eq!(agent_base_url("fe80::1"), "http://[fe80::1]:8080");
     }
 
     #[test]

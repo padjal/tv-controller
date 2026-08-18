@@ -36,7 +36,17 @@ async fn main() -> Result<()> {
         }
     });
 
-    scanner.await?;
+    let heartbeat = tokio::spawn(services::heartbeat::run(
+        state.clone(),
+        services::heartbeat::build_client()?,
+    ));
+
+    // Until the router lands in Task 3.10, the background tasks are the whole
+    // process; either one exiting means something is wrong, so stop.
+    tokio::select! {
+        res = scanner => res?,
+        res = heartbeat => res?,
+    }
 
     Ok(())
 }
