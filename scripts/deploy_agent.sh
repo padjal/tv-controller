@@ -113,10 +113,50 @@ fi
 [[ -f "$BINARY" ]] || { echo "No binary at $BINARY" >&2; exit 1; }
 
 step "Checking $TARGET_HOST"
-# Fail here with a clear message rather than midway through the install.
-ssh -o BatchMode=yes -o ConnectTimeout=10 "$TARGET_HOST" \
-  "test -d /etc/tv-agent" \
-  || { echo "Cannot reach $TARGET_HOST, or /etc/tv-agent is missing (run setup_pi.sh there first)." >&2; exit 1; }
+# Fail here with a clear message rather than midway through the install. The
+# three ways this goes wrong need three different fixes, and the old single
+# "cannot reach, or /etc/tv-agent is missing" sent people looking in the wrong
+# place — most often at the Pi, when the problem was on this machine.
+#
+# BatchMode is deliberate: it keeps a stalled password prompt from hanging an
+# unattended fleet loop. The cost is that it also suppresses the first-connect
+# "continue connecting?" prompt, so a host never seen before can only fail
+# here — hence the explicit hint rather than a bare ssh error.
+check_err="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$TARGET_HOST" \
+  "test -d /etc/tv-agent" 2>&1)" && check_rc=0 || check_rc=$?
+
+if [[ $check_rc -ne 0 ]]; then
+  echo "$check_err" >&2
+  echo >&2
+  case "$check_err" in
+    *"Host key verification failed"*|*"REMOTE HOST IDENTIFICATION HAS CHANGED"*)
+      echo "The host key for ${TARGET_HOST#*@} is not in known_hosts (or has changed)." >&2
+      echo "Connect once by hand to inspect and accept it, then re-run:" >&2
+      echo "    ssh $TARGET_HOST" >&2
+      ;;
+    *"Permission denied"*)
+      echo "$TARGET_HOST refused the login. Install your key and re-run:" >&2
+      echo "    ssh-copy-id $TARGET_HOST" >&2
+      ;;
+    *)
+      if [[ $check_rc -eq 255 ]]; then
+        echo "Could not open an ssh connection to $TARGET_HOST." >&2
+      else
+        echo "Connected, but /etc/tv-agent is missing — the Pi has not been provisioned." >&2
+        echo "Run scripts/setup_pi.sh there first." >&2
+      fi
+      ;;
+  esac
+  # Running the whole script under sudo is a common way to land here: ssh then
+  # reads root's ~/.ssh, which has neither your known_hosts nor your key. The
+  # remote install elevates itself over ssh, so no local root is needed.
+  if [[ ${EUID:-$(id -u)} -eq 0 && -n "${SUDO_USER:-}" ]]; then
+    echo >&2
+    echo "NOTE: you ran this with sudo, so ssh used root's ~/.ssh, not $SUDO_USER's." >&2
+    echo "      This script needs no local root — re-run it without sudo." >&2
+  fi
+  exit 1
+fi
 
 step "Copying $(basename "$BINARY") ($(du -h "$BINARY" | cut -f1))"
 # Staged in /tmp because the running binary cannot be overwritten in place.
