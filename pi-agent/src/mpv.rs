@@ -146,7 +146,20 @@ impl MpvClient {
             .await
     }
 
+    /// Loads `url` and plays it on repeat until something else stops it.
+    ///
+    /// Signage runs unattended, so a video that plays once and leaves the TV
+    /// on a black idle screen is never what is wanted — the file loops until
+    /// an operator sends stop or plays something else.
+    ///
+    /// `loop-file` is set *before* `loadfile`, not after: it is a global
+    /// property that outlives any one file, and setting it first means even a
+    /// very short clip cannot reach its end in the gap between the two
+    /// commands. Both are separate IPC round trips because each `send_command`
+    /// opens its own connection.
     pub async fn play(&self, url: &str) -> Result<()> {
+        self.send_command(serde_json::json!({"command": ["set_property", "loop-file", "inf"]}))
+            .await?;
         self.send_command(serde_json::json!({"command": ["loadfile", url, "replace"]}))
             .await?;
         Ok(())
@@ -303,5 +316,53 @@ mod tests {
             err.to_string().contains("connect to mpv socket"),
             "unexpected error: {err}"
         );
+    }
+
+    /// A fake mpv that answers every command with success and records what it
+    /// was asked. Each `send_command` opens its own connection, so this has to
+    /// keep accepting rather than serving a single stream.
+    fn recording_mpv(path: PathBuf) -> std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>> {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let listener = UnixListener::bind(&path).unwrap();
+        let recorded = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else { return };
+                let recorded = recorded.clone();
+                tokio::spawn(async move {
+                    let (read_half, mut write_half) = tokio::io::split(stream);
+                    let mut lines = BufReader::new(read_half).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let req: serde_json::Value = serde_json::from_str(&line).unwrap();
+                        let id = req["request_id"].as_u64().unwrap();
+                        recorded.lock().unwrap().push(req["command"].clone());
+                        let reply =
+                            serde_json::json!({"data": null, "error": "success", "request_id": id});
+                        let _ = write_half.write_all(format!("{reply}\n").as_bytes()).await;
+                    }
+                });
+            }
+        });
+        seen
+    }
+
+    #[tokio::test]
+    async fn play_loops_the_file_and_sets_the_loop_before_loading() {
+        let path = socket_path("loop");
+        let seen = recording_mpv(path.clone());
+
+        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        client.play("http://server:8000/videos/promo.mp4").await.unwrap();
+
+        let commands = seen.lock().unwrap().clone();
+        assert_eq!(
+            commands,
+            vec![
+                serde_json::json!(["set_property", "loop-file", "inf"]),
+                serde_json::json!(["loadfile", "http://server:8000/videos/promo.mp4", "replace"]),
+            ],
+            "play must arm the loop before loading, or a short clip can end first"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 }

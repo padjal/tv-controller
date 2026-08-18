@@ -60,11 +60,11 @@ for input in "$@"; do
     # Re-running over the library must be cheap and idempotent, so anything
     # already at a sane rate is left alone. The 1.2 factor keeps a file that is
     # a hair over the cap from being re-encoded for no visible gain.
-    if [[ "${FORCE:-}" != "1" ]] \
-       && awk -v b="$br" -v m="$MAX_MBPS" 'BEGIN { exit !(b <= m * 1000000 * 1.2) }'; then
-      echo "   skip     already within ${MAX_MBPS} Mbps"
-      continue
-    fi
+#    if [[ "${FORCE:-}" != "1" ]] \
+#       && awk -v b="$br" -v m="$MAX_MBPS" 'BEGIN { exit !(b <= m * 1000000 * 1.2) }'; then
+#      echo "   skip     already within ${MAX_MBPS} Mbps"
+#      continue
+#    fi
   else
     echo "   current  unknown — encoding anyway"
   fi
@@ -75,12 +75,22 @@ for input in "$@"; do
   trap 'rm -f "$tmp"' EXIT
 
   echo "   encoding CRF $CRF, cap ${MAX_MBPS} Mbps"
+#  ffmpeg -nostdin -v error -stats -i "$input" \
+#    -c:v libx264 -preset slow -crf "$CRF" \
+#    -maxrate "${MAX_MBPS}M" -bufsize "$((MAX_MBPS * 2))M" \
+#    -profile:v high -level 4.0 \
+#    -pix_fmt yuv420p \
+#    -r 25 \
+#    -c:a aac -b:a 128k -ac 2 \
+#    -movflags +faststart \
+#    "$tmp"
+
   ffmpeg -nostdin -v error -stats -i "$input" \
-    -c:v libx264 -preset slow -crf "$CRF" \
-    -maxrate "${MAX_MBPS}M" -bufsize "$((MAX_MBPS * 2))M" \
+    -vf "scale=-2:720,fps=25" \
+    -c:v libx264 -preset slow -crf 26 \
     -profile:v high -level 4.0 \
     -pix_fmt yuv420p \
-    -c:a aac -b:a 192k -ac 2 \
+    -c:a aac -b:a 128k -ac 2 \
     -movflags +faststart \
     "$tmp"
 
