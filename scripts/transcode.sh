@@ -75,24 +75,24 @@ for input in "$@"; do
   trap 'rm -f "$tmp"' EXIT
 
   echo "   encoding CRF $CRF, cap ${MAX_MBPS} Mbps"
-#  ffmpeg -nostdin -v error -stats -i "$input" \
-#    -c:v libx264 -preset slow -crf "$CRF" \
-#    -maxrate "${MAX_MBPS}M" -bufsize "$((MAX_MBPS * 2))M" \
-#    -profile:v high -level 4.0 \
-#    -pix_fmt yuv420p \
-#    -r 25 \
-#    -c:a aac -b:a 128k -ac 2 \
-#    -movflags +faststart \
-#    "$tmp"
-
   ffmpeg -nostdin -v error -stats -i "$input" \
-    -vf "scale=-2:720,fps=25" \
-    -c:v libx264 -preset slow -crf 26 \
+    -c:v libx264 -preset slow -crf "$CRF" \
+    -maxrate "${MAX_MBPS}M" -bufsize "$((MAX_MBPS * 2))M" \
     -profile:v high -level 4.0 \
     -pix_fmt yuv420p \
+    -r 25 \
     -c:a aac -b:a 128k -ac 2 \
     -movflags +faststart \
     "$tmp"
+
+#  ffmpeg -nostdin -v error -stats -i "$input" \
+#    -vf "scale=-2:720,fps=25" \
+#    -c:v libx264 -preset slow -crf 26 \
+#    -profile:v high -level 4.0 \
+#    -pix_fmt yuv420p \
+#    -c:a aac -b:a 128k -ac 2 \
+#    -movflags +faststart \
+#    "$tmp"
 
   mv -f "$input" "$MASTERS_DIR/$name"
   mv -f "$tmp" "$input"
