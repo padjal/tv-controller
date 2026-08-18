@@ -12,6 +12,10 @@ pub struct Device {
     pub ip: String,
     pub state: DeviceState,
     pub current_video: Option<String>,
+    // Unix timestamp. Serialized as a JSON number, so the generated TS must
+    // say `number` — ts-rs maps i64 to `bigint` by default, which JSON.parse
+    // never produces.
+    #[ts(type = "number")]
     pub last_seen: i64,
 }
 
@@ -32,6 +36,8 @@ pub struct Video {
     pub id: Uuid,
     pub filename: String,
     pub duration_secs: Option<u32>,
+    // Same as Device::last_seen: a JSON number on the wire, not a bigint.
+    #[ts(type = "number")]
     pub size_bytes: u64,
 }
 

@@ -8,7 +8,8 @@ See `docs/coding-plan.md` for full task breakdown.
 - Phase 1 complete: `shared` crate with all wire types, TS export test passing, 10 `.ts` files in `dashboard/src/types/`
 - Phase 2 complete: `pi-agent` — config, mpv IPC client, axum router, main with registration retry, systemd deploy files. Verified on Pi 5: health, status, play, pause, resume, stop all working over HTTP.
 - Phase 3 complete: server — db, AppState, video_scan, fan_out, heartbeat, device/video/playback/SSE handlers, router and main. 95 tests. Verified live: all three `scripts/test/server/*.sh` suites pass against a running server, SSE carries events from all four sources, SIGTERM shuts down cleanly. `main` serves `/api` on `PORT` (default 8000) and runs the scanner + heartbeat; static file serving lands in 3.10.
-- Phase 4 (dashboard), Phase 5 (deployment) not started. `/` 404s until `npm run build` produces a dashboard build; the server logs a warning at startup when it finds none.
+- Phase 4 (dashboard) in progress: project scaffolded (Vite + React + TS + Vitest), 4.1 `useSSE.ts` and 4.2 `api.ts` done with 20 tests, 4.6 build integration done early (needed to verify the two). Next: 4.3 TVGrid, 4.4 VideoLibrary, 4.5 CommandBar — `src/App.tsx` is a placeholder shell they replace.
+- Phase 5 (deployment) not started.
 
 ## Conventions
 - All errors use `anyhow::Result` — no unwrap() outside tests
@@ -16,6 +17,7 @@ See `docs/coding-plan.md` for full task breakdown.
 - Database access only via functions in `server/src/db.rs` — no inline queries in handlers
 - Run `cargo clippy -- -D warnings` before considering any task done
 - Run `cargo test -p shared` after any type change to regenerate TS files
+- Dashboard: `npm run typecheck`, `npm test`, `npm run build` from `dashboard/`. `build` typechecks first and writes to `server/dashboard/dist/`
 
 ## Known issues / decisions
 - mpv IPC request_id matching: see comment in pi-agent/src/mpv.rs line 42
@@ -39,6 +41,11 @@ See `docs/coding-plan.md` for full task breakdown.
 - `/api` has its own 404 fallback. Without it an unknown API path would reach the SPA fallback and answer a `fetch()` with index.html and a 200
 - The dashboard is served from `DASHBOARD_DIR` (default `dashboard/dist`, resolved against the working directory) with an index.html fallback, so client-side deep links and refreshes work
 - The server handles SIGTERM and Ctrl-C, so `docker stop` and `systemctl restart` exit cleanly rather than being killed
+- ts-rs maps `i64`/`u64` to TS `bigint`, which `JSON.parse` never produces — the wire carries plain JSON numbers. `Device::last_seen` and `Video::size_bytes` are pinned with `#[ts(type = "number")]`. Do the same for any new 64-bit field
+- `useSSE` is callback-based, not last-event-state: a burst of `DeviceUpdated` events (playing on five TVs) coalesces into one React render, so a `lastEvent` hook would drop all but the last and leave tiles stale
+- `api.ts` returns the body on a 502 instead of throwing — that status means every device refused, and the `{succeeded, failed}` detail is what a failure toast needs. Other error statuses throw `ApiError` carrying the server's message
+- `PlaybackResult` in `api.ts` is hand-written to mirror `PlaybackResponse` in `server/src/handlers/playback.rs`, which is server-local rather than a `shared` type — keep them in step
+- `dashboard/src/types/index.ts` is a hand-maintained barrel over the ts-rs output; add a line when adding a shared type
 - Server assumes every agent is on port 8080 (`AGENT_PORT` in `server/src/services/mod.rs`); `devices` has no port column, so an agent moved off the default is unreachable
 - Heartbeat broadcasts only when a device's state or current video actually changes, not every 10s tick — `last_seen` is still persisted each round
 - A device is marked Offline only after 30s of silence, and announced once; `last_seen` is left at its old value so it records when the device was last actually seen

@@ -4,3 +4,9 @@
 *.db
 *.db-wal
 *.db-shm
+
+# dashboard
+node_modules/
+dist/
+# vite build output, served by the server at runtime
+server/dashboard/
