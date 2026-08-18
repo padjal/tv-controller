@@ -1,60 +1,12 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSSE } from "./useSSE";
+import {
+  currentEventSource,
+  FakeEventSource,
+  installFakeEventSource,
+} from "../test/fakeEventSource";
 import type { SseEvent } from "../types";
-
-/** Minimal EventSource stand-in the tests can drive by hand. */
-class FakeEventSource {
-  static instances: FakeEventSource[] = [];
-  static readonly CLOSED = 2;
-
-  onopen: (() => void) | null = null;
-  onmessage: ((event: MessageEvent<string>) => void) | null = null;
-  onerror: (() => void) | null = null;
-  readyState = 0;
-  closed = false;
-  private listeners = new Map<string, ((event: MessageEvent<string>) => void)[]>();
-
-  constructor(readonly url: string) {
-    FakeEventSource.instances.push(this);
-  }
-
-  addEventListener(type: string, listener: (event: MessageEvent<string>) => void) {
-    const existing = this.listeners.get(type) ?? [];
-    existing.push(listener);
-    this.listeners.set(type, existing);
-  }
-
-  close() {
-    this.closed = true;
-    this.readyState = FakeEventSource.CLOSED;
-  }
-
-  // ── driving the fake ──
-  open() {
-    this.readyState = 1;
-    this.onopen?.();
-  }
-
-  emit(data: unknown) {
-    this.onmessage?.({ data: JSON.stringify(data) } as MessageEvent<string>);
-  }
-
-  emitRaw(data: string) {
-    this.onmessage?.({ data } as MessageEvent<string>);
-  }
-
-  emitNamed(type: string, data: string) {
-    for (const listener of this.listeners.get(type) ?? []) {
-      listener({ data } as MessageEvent<string>);
-    }
-  }
-
-  fail({ closed = false } = {}) {
-    this.readyState = closed ? FakeEventSource.CLOSED : 0;
-    this.onerror?.();
-  }
-}
 
 function anEvent(name: string): SseEvent {
   return {
@@ -63,11 +15,10 @@ function anEvent(name: string): SseEvent {
   };
 }
 
-const latest = () => FakeEventSource.instances.at(-1)!;
+const latest = currentEventSource;
 
 beforeEach(() => {
-  FakeEventSource.instances = [];
-  vi.stubGlobal("EventSource", FakeEventSource);
+  installFakeEventSource();
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 

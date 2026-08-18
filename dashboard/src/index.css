@@ -1,0 +1,80 @@
+/* Theme tokens and the app shell. Components bring their own CSS. */
+:root {
+  --bg: #0f1115;
+  --surface: #181b22;
+  --surface-raised: #1f232c;
+  --line: #2a2f3a;
+  --line-strong: #3a4150;
+  --ink: #e6e8ec;
+  --muted: #98a0ae;
+  --accent: #4f9dff;
+  --focus: #8ab4f8;
+  --danger: #ff6b6b;
+
+  --badge-ink: #0f1115;
+  --state-idle: #8a94a6;
+  --state-playing: #46d18b;
+  --state-paused: #f0b342;
+  --state-offline: #e2585b;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+}
+
+.app {
+  /* Room for the sticky CommandBar (task 4.5). */
+  padding: 1.25rem 1.25rem 6rem;
+  max-width: 90rem;
+  margin: 0 auto;
+}
+
+.app__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.app__header h1 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.app__status {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.app__status--open::before {
+  content: "● ";
+  color: var(--state-playing);
+}
+
+.app__status--connecting::before {
+  content: "● ";
+  color: var(--state-paused);
+}
+
+.app__status--closed::before {
+  content: "● ";
+  color: var(--state-offline);
+}
+
+button {
+  font: inherit;
+}

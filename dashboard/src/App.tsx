@@ -1,62 +1,35 @@
-import { useCallback, useEffect, useState } from "react";
-import { api, EVENTS_URL } from "./api";
-import { useSSE } from "./hooks/useSSE";
-import type { Device, Video } from "./types";
+import { useCallback, useState } from "react";
+import { TVGrid } from "./components/TVGrid";
 
 /**
- * Placeholder shell. TVGrid, VideoLibrary and CommandBar replace this in
- * tasks 4.3-4.5; for now it proves the API client and event stream are wired.
+ * Owns the selection that CommandBar acts on. Device and video lists live in
+ * the components that render them.
+ *
+ * VideoLibrary and CommandBar arrive in tasks 4.4 and 4.5.
  */
 export function App() {
-  const [devices, setDevices] = useState<Device[]>([]);
-  const [videos, setVideos] = useState<Video[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  const refresh = useCallback(() => {
-    Promise.all([api.getDevices(), api.getVideos()])
-      .then(([nextDevices, nextVideos]) => {
-        setDevices(nextDevices);
-        setVideos(nextVideos);
-        setError(null);
-      })
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+  const toggle = useCallback((id: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) {
+        next.add(id);
+      }
+      return next;
+    });
   }, []);
 
-  useEffect(refresh, [refresh]);
-
-  const status = useSSE(EVENTS_URL, {
-    onEvent: (event) => {
-      if (event.kind === "DeviceUpdated" || event.kind === "DeviceOffline") {
-        const updated = event.payload as Device;
-        setDevices((current) =>
-          current.some((device) => device.id === updated.id)
-            ? current.map((device) => (device.id === updated.id ? updated : device))
-            : [...current, updated],
-        );
-      } else {
-        refresh();
-      }
-    },
-    // Events were dropped, so deltas can no longer be trusted.
-    onLagged: refresh,
-  });
-
   return (
-    <main>
-      <h1>TV Controller</h1>
-      <p>stream: {status}</p>
-      {error && <p role="alert">{error}</p>}
-      <p>
-        {devices.length} device(s), {videos.length} video(s)
-      </p>
-      <ul>
-        {devices.map((device) => (
-          <li key={device.id}>
-            {device.name} — {device.state}
-            {device.current_video ? ` — ${device.current_video}` : ""}
-          </li>
-        ))}
-      </ul>
+    <main className="app">
+      <header className="app__header">
+        <h1>TV Controller</h1>
+        <span className="app__status">
+          {selectedIds.size > 0 ? `${selectedIds.size} selected` : "none selected"}
+        </span>
+      </header>
+
+      <TVGrid selectedIds={selectedIds} onToggle={toggle} />
     </main>
   );
 }

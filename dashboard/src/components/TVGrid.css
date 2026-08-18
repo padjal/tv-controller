@@ -1,0 +1,92 @@
+.tv-grid {
+  display: grid;
+  /* 4–5 columns on a desktop, collapsing on narrower screens without any
+     breakpoints of its own. */
+  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tv-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  /* Reserve the ring's width up front so selecting a tile does not reflow the
+     grid. */
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition:
+    outline-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.tv-tile:hover {
+  border-color: var(--line-strong);
+}
+
+.tv-tile:focus-visible {
+  outline-color: var(--focus);
+}
+
+.tv-tile--selected {
+  outline-color: var(--accent);
+  border-color: var(--accent);
+}
+
+.tv-tile__name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.tv-tile__badge {
+  align-self: flex-start;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--badge-ink);
+}
+
+.tv-tile__badge--idle {
+  background: var(--state-idle);
+}
+.tv-tile__badge--playing {
+  background: var(--state-playing);
+}
+.tv-tile__badge--paused {
+  background: var(--state-paused);
+}
+.tv-tile__badge--offline {
+  background: var(--state-offline);
+}
+
+.tv-tile__video {
+  font-size: 0.85rem;
+  color: var(--muted);
+  /* Long filenames must not stretch a grid column. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tv-grid__note {
+  padding: 1rem;
+  color: var(--muted);
+}
+
+.tv-grid__note--error {
+  color: var(--danger);
+}

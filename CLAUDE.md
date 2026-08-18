@@ -8,7 +8,7 @@ See `docs/coding-plan.md` for full task breakdown.
 - Phase 1 complete: `shared` crate with all wire types, TS export test passing, 10 `.ts` files in `dashboard/src/types/`
 - Phase 2 complete: `pi-agent` — config, mpv IPC client, axum router, main with registration retry, systemd deploy files. Verified on Pi 5: health, status, play, pause, resume, stop all working over HTTP.
 - Phase 3 complete: server — db, AppState, video_scan, fan_out, heartbeat, device/video/playback/SSE handlers, router and main. 95 tests. Verified live: all three `scripts/test/server/*.sh` suites pass against a running server, SSE carries events from all four sources, SIGTERM shuts down cleanly. `main` serves `/api` on `PORT` (default 8000) and runs the scanner + heartbeat; static file serving lands in 3.10.
-- Phase 4 (dashboard) in progress: project scaffolded (Vite + React + TS + Vitest), 4.1 `useSSE.ts` and 4.2 `api.ts` done with 20 tests, 4.6 build integration done early (needed to verify the two). Next: 4.3 TVGrid, 4.4 VideoLibrary, 4.5 CommandBar — `src/App.tsx` is a placeholder shell they replace.
+- Phase 4 (dashboard) in progress: 4.1 `useSSE.ts`, 4.2 `api.ts`, 4.3 `TVGrid.tsx` done, 4.6 build integration done early (needed to verify the rest). 35 tests. Next: 4.4 VideoLibrary, 4.5 CommandBar.
 - Phase 5 (deployment) not started.
 
 ## Conventions
@@ -46,6 +46,10 @@ See `docs/coding-plan.md` for full task breakdown.
 - `api.ts` returns the body on a 502 instead of throwing — that status means every device refused, and the `{succeeded, failed}` detail is what a failure toast needs. Other error statuses throw `ApiError` carrying the server's message
 - `PlaybackResult` in `api.ts` is hand-written to mirror `PlaybackResponse` in `server/src/handlers/playback.rs`, which is server-local rather than a `shared` type — keep them in step
 - `dashboard/src/types/index.ts` is a hand-maintained barrel over the ts-rs output; add a line when adding a shared type
+- Selection state is lifted to `App`; `TVGrid` takes `selectedIds` + `onToggle` so `CommandBar` can act on it. Each component owns the data it renders and its own SSE subscription — that is one EventSource per component, which is fine for two or three but worth consolidating if more are added
+- Tiles are `<button aria-pressed>` rather than clickable divs, so selection works from the keyboard
+- Dashboard styling is plain CSS: tokens and shell in `src/index.css`, one CSS file per component. No CSS framework
+- The dashboard UI has never been opened in a real browser — tests are jsdom, so behaviour is covered but visual layout is not
 - Server assumes every agent is on port 8080 (`AGENT_PORT` in `server/src/services/mod.rs`); `devices` has no port column, so an agent moved off the default is unreachable
 - Heartbeat broadcasts only when a device's state or current video actually changes, not every 10s tick — `last_seen` is still persisted each round
 - A device is marked Offline only after 30s of silence, and announced once; `last_seen` is left at its old value so it records when the device was last actually seen
