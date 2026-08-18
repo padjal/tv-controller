@@ -7,7 +7,7 @@ See `docs/coding-plan.md` for full task breakdown.
 ## Current state
 - Phase 1 complete: `shared` crate with all wire types, TS export test passing, 10 `.ts` files in `dashboard/src/types/`
 - Phase 2 complete: `pi-agent` — config, mpv IPC client, axum router, main with registration retry, systemd deploy files. Verified on Pi 5: health, status, play, pause, resume, stop all working over HTTP.
-- Phase 3 (server) in progress: 3.1–3.8 done (db, AppState, video_scan, fan_out, heartbeat, device/video/playback handlers). Next: 3.9 SSE handler, then 3.10 main wiring. `main` serves `/api` on `PORT` (default 8000) and runs the scanner + heartbeat; static file serving lands in 3.10.
+- Phase 3 (server) in progress: 3.1–3.9 done (db, AppState, video_scan, fan_out, heartbeat, device/video/playback/SSE handlers). Next: 3.10 main wiring (dashboard ServeDir fallback) — everything else in the phase is done. `main` serves `/api` on `PORT` (default 8000) and runs the scanner + heartbeat; static file serving lands in 3.10.
 - Phase 4 (dashboard), Phase 5 (deployment) not started
 
 ## Conventions
@@ -34,6 +34,8 @@ See `docs/coding-plan.md` for full task breakdown.
 - A device that refuses a playback command gets no database write — its real state is unknown, and the heartbeat is what decides it is offline. Only successes are recorded and broadcast
 - pause/resume keep `current_video`; stop clears it; play sets it
 - Playback commands refresh `last_seen` on success, since a reply proves the agent is alive
+- SSE: a subscriber that falls more than 64 events behind gets a named `lagged` frame, not a panic — the plan's sketch unwrapped the `Lagged` error, which would kill the connection. The current dashboard hook only reads unnamed messages so it ignores that frame; the warning is also logged. After a lag the receiver resumes at the oldest still-buffered event
+- The dashboard fetches state then subscribes, so events published in between are missed. There is no snapshot-on-connect (that would need a new `SseKind`); a lagged or racing client stays stale until the next real change
 - Server assumes every agent is on port 8080 (`AGENT_PORT` in `server/src/services/mod.rs`); `devices` has no port column, so an agent moved off the default is unreachable
 - Heartbeat broadcasts only when a device's state or current video actually changes, not every 10s tick — `last_seen` is still persisted each round
 - A device is marked Offline only after 30s of silence, and announced once; `last_seen` is left at its old value so it records when the device was last actually seen
@@ -50,6 +52,7 @@ Bash scripts live in `scripts/test/<component>/`. Run from Git Bash on Windows o
 - `scripts/test/server/devices.sh [SERVER_HOST]` — register (twice, for idempotency) → list → get → 404 → 400 → delete
 - `scripts/test/server/videos.sh [SERVER_HOST]` — list → metadata → file download → Range → 416 → 404. Needs a video in `VIDEOS_DIR`; skips file tests if the library is empty
 - `scripts/test/server/playback.sh [SERVER_HOST]` — play → pause → resume → stop → play-all → 400/404/502. Needs a registered device that is actually reachable (real pi-agent, or any stub answering POST /play,/stop,/pause,/resume on 8080) and one indexed video
+- `scripts/test/server/events.sh [SERVER_HOST]` — tail the SSE stream, one line per event. Run it in one terminal and drive the server from another
 
 `PI_HOST` defaults to `192.168.1.11`, `VIDEO_PATH` defaults to `/tmp/test.mp4`, `SERVER_HOST` defaults to `127.0.0.1` (port 8000). Override via env var or positional arg.
 

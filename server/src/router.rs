@@ -6,7 +6,7 @@ use axum::routing::{delete, get, post};
 use axum::Router;
 use tower_http::services::ServeDir;
 
-use crate::handlers::{devices, playback, videos};
+use crate::handlers::{devices, playback, sse, videos};
 use crate::state::AppState;
 
 /// The whole application. `main` and the handler tests both build from here, so
@@ -39,4 +39,5 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/playback/stop", post(playback::stop))
         .route("/playback/pause", post(playback::pause))
         .route("/playback/resume", post(playback::resume))
+        .route("/events", get(sse::sse_handler))
 }
