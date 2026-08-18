@@ -1550,6 +1550,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dotenvy",
+ "percent-encoding",
+ "serde",
+ "serde_json",
  "shared",
  "sqlx",
  "tokio",
