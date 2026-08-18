@@ -29,12 +29,18 @@ COPY Cargo.toml Cargo.lock ./
 COPY shared/Cargo.toml ./shared/
 COPY server/Cargo.toml ./server/
 COPY pi-agent/Cargo.toml ./pi-agent/
-RUN mkdir -p shared/src server/src pi-agent/src \
+# Every target a manifest declares must exist on disk or cargo refuses to parse
+# it, even for `-p server`, which loads the whole workspace. So the dummy tree
+# needs shared/tests/ts_export.rs for shared's explicit [[test]], and
+# pi-agent/src/main.rs is left in place afterwards — pi-agent's real sources are
+# never copied into this stage, and a member with no targets is a parse error.
+RUN mkdir -p shared/src shared/tests server/src pi-agent/src \
     && echo "" > shared/src/lib.rs \
+    && echo "" > shared/tests/ts_export.rs \
     && echo "fn main() {}" > server/src/main.rs \
     && echo "fn main() {}" > pi-agent/src/main.rs \
     && cargo build --release -p server \
-    && rm -rf shared/src server/src pi-agent/src
+    && rm -rf shared/src shared/tests server/src
 
 COPY shared/ ./shared/
 COPY server/ ./server/
