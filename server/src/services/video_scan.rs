@@ -323,7 +323,7 @@ mod tests {
             let db = db::connect(&format!("sqlite:{}", root.join("test.db").display()))
                 .await
                 .unwrap();
-            let state = AppState::new(db, "http://host:8000", videos);
+            let state = AppState::new(db, "http://host:8000", videos, reqwest::Client::new());
             TempDirs { root, state }
         }
 

@@ -40,6 +40,9 @@ const PATH_SEGMENT: &AsciiSet = &CONTROLS
 pub struct AppState {
     pub db: Db,
     pub sse_tx: broadcast::Sender<SseEvent>,
+    /// Shared client for talking to agents. One pooled client for the whole
+    /// process, rather than a fresh one per command.
+    pub http: reqwest::Client,
     /// Absolute base the Pi agents use to reach this server, e.g.
     /// `http://192.168.1.10:8000`. Stored without a trailing slash.
     pub server_base_url: String,
@@ -47,11 +50,17 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(db: Db, server_base_url: &str, videos_dir: PathBuf) -> Arc<Self> {
+    pub fn new(
+        db: Db,
+        server_base_url: &str,
+        videos_dir: PathBuf,
+        http: reqwest::Client,
+    ) -> Arc<Self> {
         let (sse_tx, _rx) = broadcast::channel(SSE_CHANNEL_CAPACITY);
         Arc::new(AppState {
             db,
             sse_tx,
+            http,
             server_base_url: server_base_url.trim_end_matches('/').to_string(),
             videos_dir,
         })
@@ -66,7 +75,12 @@ impl AppState {
         let server_base_url = std::env::var("SERVER_BASE_URL")
             .context("SERVER_BASE_URL must be set (e.g. http://192.168.1.10:8000)")?;
         let videos_dir = std::env::var("VIDEOS_DIR").unwrap_or_else(|_| "videos".to_string());
-        Ok(Self::new(db, &server_base_url, PathBuf::from(videos_dir)))
+        Ok(Self::new(
+            db,
+            &server_base_url,
+            PathBuf::from(videos_dir),
+            crate::services::fan_out::build_client()?,
+        ))
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<SseEvent> {
@@ -113,7 +127,12 @@ mod tests {
         let db = SqlitePoolOptions::new()
             .connect_lazy("sqlite::memory:")
             .unwrap();
-        AppState::new(db, base_url, PathBuf::from("videos"))
+        AppState::new(
+            db,
+            base_url,
+            PathBuf::from("videos"),
+            reqwest::Client::new(),
+        )
     }
 
     #[tokio::test]

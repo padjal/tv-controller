@@ -26,6 +26,15 @@ impl ApiError {
         }
     }
 
+    /// A well-formed request that cannot be carried out right now — e.g.
+    /// play-all when every TV is offline.
+    pub fn conflict(why: impl std::fmt::Display) -> Self {
+        ApiError {
+            status: StatusCode::CONFLICT,
+            message: why.to_string(),
+        }
+    }
+
     pub fn bad_request(why: impl std::fmt::Display) -> Self {
         ApiError {
             status: StatusCode::BAD_REQUEST,

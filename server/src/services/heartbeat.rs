@@ -269,7 +269,12 @@ mod tests {
             let db = db::connect(&format!("sqlite:{}", root.join("test.db").display()))
                 .await
                 .unwrap();
-            let state = AppState::new(db, "http://host:8000", root.join("videos"));
+            let state = AppState::new(
+                db,
+                "http://host:8000",
+                root.join("videos"),
+                reqwest::Client::new(),
+            );
             Harness { root, state }
         }
 

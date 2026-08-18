@@ -7,7 +7,7 @@ See `docs/coding-plan.md` for full task breakdown.
 ## Current state
 - Phase 1 complete: `shared` crate with all wire types, TS export test passing, 10 `.ts` files in `dashboard/src/types/`
 - Phase 2 complete: `pi-agent` — config, mpv IPC client, axum router, main with registration retry, systemd deploy files. Verified on Pi 5: health, status, play, pause, resume, stop all working over HTTP.
-- Phase 3 (server) in progress: 3.1 db, 3.2 AppState, 3.3 video_scan, 3.4 fan_out, 3.5 heartbeat, 3.6 device handlers, 3.7 video handlers done. Next: 3.8 playback handlers. `main` serves `/api` on `PORT` (default 8000) and runs the scanner + heartbeat; static file serving lands in 3.10.
+- Phase 3 (server) in progress: 3.1–3.8 done (db, AppState, video_scan, fan_out, heartbeat, device/video/playback handlers). Next: 3.9 SSE handler, then 3.10 main wiring. `main` serves `/api` on `PORT` (default 8000) and runs the scanner + heartbeat; static file serving lands in 3.10.
 - Phase 4 (dashboard), Phase 5 (deployment) not started
 
 ## Conventions
@@ -30,6 +30,10 @@ See `docs/coding-plan.md` for full task breakdown.
 - ffprobe reports `format.duration` as a JSON *string* ("30.024000"), and omits it entirely for some containers — see `parse_duration_secs` in `server/src/services/video_scan.rs`
 - Video scanning is non-recursive and prunes rows whose file is gone; `videos_dir` must stay flat because `filename` is UNIQUE and the serve route is `/videos/:filename`
 - `db.rs`, `state.rs`, `fan_out.rs` and `heartbeat.rs` carry a module-level `#![allow(dead_code)]` while Phase 3 is incomplete — remove them once the handlers land
+- Playback status codes are meaningful because `api.ts` checks `res.ok`: 200 if at least one device accepted, 502 if every target failed, 409 for play-all with nothing online, 400 for empty `device_ids`, 404 for an unknown video. Per-device detail is in the `{succeeded, failed}` body
+- A device that refuses a playback command gets no database write — its real state is unknown, and the heartbeat is what decides it is offline. Only successes are recorded and broadcast
+- pause/resume keep `current_video`; stop clears it; play sets it
+- Playback commands refresh `last_seen` on success, since a reply proves the agent is alive
 - Server assumes every agent is on port 8080 (`AGENT_PORT` in `server/src/services/mod.rs`); `devices` has no port column, so an agent moved off the default is unreachable
 - Heartbeat broadcasts only when a device's state or current video actually changes, not every 10s tick — `last_seen` is still persisted each round
 - A device is marked Offline only after 30s of silence, and announced once; `last_seen` is left at its old value so it records when the device was last actually seen
@@ -45,6 +49,7 @@ Bash scripts live in `scripts/test/<component>/`. Run from Git Bash on Windows o
 - `scripts/test/pi-agent/status.sh [PI_HOST]` — show current state
 - `scripts/test/server/devices.sh [SERVER_HOST]` — register (twice, for idempotency) → list → get → 404 → 400 → delete
 - `scripts/test/server/videos.sh [SERVER_HOST]` — list → metadata → file download → Range → 416 → 404. Needs a video in `VIDEOS_DIR`; skips file tests if the library is empty
+- `scripts/test/server/playback.sh [SERVER_HOST]` — play → pause → resume → stop → play-all → 400/404/502. Needs a registered device that is actually reachable (real pi-agent, or any stub answering POST /play,/stop,/pause,/resume on 8080) and one indexed video
 
 `PI_HOST` defaults to `192.168.1.11`, `VIDEO_PATH` defaults to `/tmp/test.mp4`, `SERVER_HOST` defaults to `127.0.0.1` (port 8000). Override via env var or positional arg.
 
