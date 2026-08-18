@@ -138,6 +138,30 @@ OS), copies the binary, restarts the service, and checks `/health`. For a 32-bit
 image, set `TARGET_ARCH=armv7-unknown-linux-gnueabihf`; `Cross.toml` has the
 targets already configured.
 
+**On an Apple Silicon Mac, `cross` does not work.** Version 0.2.5 assumes
+x86_64 Linux images and dies trying to install an x86_64 toolchain:
+
+```
+error: toolchain 'stable-x86_64-unknown-linux-gnu' may not be able to run on this system
+```
+
+You do not need it there. An arm64 host runs an arm64 Linux container, whose
+own triple *is* `aarch64-unknown-linux-gnu`, so the build is native rather than
+cross — faster, and with no emulation:
+
+```bash
+docker run --rm -v "$PWD":/app -w /app rust:1.97-slim-bookworm bash -c '
+  apt-get update -qq && apt-get install -y -qq --no-install-recommends build-essential
+  cargo build --release -p pi-agent --target aarch64-unknown-linux-gnu
+  chown -R $(id -u):$(id -g) target/aarch64-unknown-linux-gnu'   # id from the host
+./scripts/deploy_agent.sh pi@tv-01.local     # SKIP_BUILD=1 also works
+```
+
+The binary lands where `deploy_agent.sh` looks for it, so the deploy step is
+unchanged. Build on `bookworm` (glibc 2.36) rather than something newer: a
+binary runs against its own glibc or later, never an older one, and Raspberry
+Pi OS is bookworm-based.
+
 It installs over a non-interactive SSH session, so the account needs
 passwordless sudo — the default on Raspberry Pi OS. Set up your SSH key first
 (`ssh-copy-id pi@tv-01.local`) or every deployment will ask for a password

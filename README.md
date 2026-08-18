@@ -59,6 +59,9 @@ cargo install cross            # once
 ./scripts/deploy_agent.sh pi@tv-01.local
 ```
 
+On an Apple Silicon Mac `cross` does not work; build the agent in an arm64
+container instead — see [docs/deployment.md](docs/deployment.md#setting-up-the-first-pi).
+
 The TV appears in the dashboard within a few seconds.
 
 Full instructions, including cloning one SD card across a fleet:
