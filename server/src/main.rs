@@ -5,6 +5,8 @@ mod router;
 mod services;
 mod state;
 
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
 
 use crate::state::AppState;
@@ -20,6 +22,10 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "8000".to_string())
         .parse()
         .context("PORT must be a number")?;
+    // Where `npm run build` puts the dashboard. Relative paths resolve against
+    // the working directory, which is /app under docker-compose.
+    let dashboard_dir =
+        PathBuf::from(std::env::var("DASHBOARD_DIR").unwrap_or_else(|_| "dashboard/dist".into()));
 
     let pool = db::connect(&database_url).await?;
     let state = AppState::from_env(pool)?;
@@ -31,6 +37,17 @@ async fn main() -> Result<()> {
         "database ready ({database_url}): {} device(s) registered",
         devices.len()
     );
+
+    if dashboard_dir.join("index.html").is_file() {
+        tracing::info!(dir = %dashboard_dir.display(), "serving dashboard");
+    } else {
+        // Not fatal — the API is still fully usable — but it is the likely
+        // cause of a blank page, so say so once at startup.
+        tracing::warn!(
+            dir = %dashboard_dir.display(),
+            "no dashboard build found (run `npm run build` in dashboard/); / will 404"
+        );
+    }
 
     // The watcher scans once before it starts watching, so the library is
     // populated by the time the first request can arrive.
@@ -48,7 +65,7 @@ async fn main() -> Result<()> {
         services::heartbeat::build_client()?,
     ));
 
-    let app = router::app(state);
+    let app = router::app(state, Some(&dashboard_dir));
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr)
@@ -68,7 +85,38 @@ async fn main() -> Result<()> {
         res = scanner => res?,
         res = heartbeat => res?,
         res = server => res?,
+        _ = shutdown_signal() => tracing::info!("shutting down"),
     }
 
     Ok(())
+}
+
+/// Ctrl-C, or SIGTERM from systemd/docker on stop.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            // Without SIGTERM handling Ctrl-C still works; do not take the
+            // process down over it.
+            Err(err) => {
+                tracing::warn!(%err, "could not listen for SIGTERM");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
 }

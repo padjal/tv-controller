@@ -7,8 +7,8 @@ See `docs/coding-plan.md` for full task breakdown.
 ## Current state
 - Phase 1 complete: `shared` crate with all wire types, TS export test passing, 10 `.ts` files in `dashboard/src/types/`
 - Phase 2 complete: `pi-agent` — config, mpv IPC client, axum router, main with registration retry, systemd deploy files. Verified on Pi 5: health, status, play, pause, resume, stop all working over HTTP.
-- Phase 3 (server) in progress: 3.1–3.9 done (db, AppState, video_scan, fan_out, heartbeat, device/video/playback/SSE handlers). Next: 3.10 main wiring (dashboard ServeDir fallback) — everything else in the phase is done. `main` serves `/api` on `PORT` (default 8000) and runs the scanner + heartbeat; static file serving lands in 3.10.
-- Phase 4 (dashboard), Phase 5 (deployment) not started
+- Phase 3 complete: server — db, AppState, video_scan, fan_out, heartbeat, device/video/playback/SSE handlers, router and main. 95 tests. Verified live: all three `scripts/test/server/*.sh` suites pass against a running server, SSE carries events from all four sources, SIGTERM shuts down cleanly. `main` serves `/api` on `PORT` (default 8000) and runs the scanner + heartbeat; static file serving lands in 3.10.
+- Phase 4 (dashboard), Phase 5 (deployment) not started. `/` 404s until `npm run build` produces a dashboard build; the server logs a warning at startup when it finds none.
 
 ## Conventions
 - All errors use `anyhow::Result` — no unwrap() outside tests
@@ -36,6 +36,9 @@ See `docs/coding-plan.md` for full task breakdown.
 - Playback commands refresh `last_seen` on success, since a reply proves the agent is alive
 - SSE: a subscriber that falls more than 64 events behind gets a named `lagged` frame, not a panic — the plan's sketch unwrapped the `Lagged` error, which would kill the connection. The current dashboard hook only reads unnamed messages so it ignores that frame; the warning is also logged. After a lag the receiver resumes at the oldest still-buffered event
 - The dashboard fetches state then subscribes, so events published in between are missed. There is no snapshot-on-connect (that would need a new `SseKind`); a lagged or racing client stays stale until the next real change
+- `/api` has its own 404 fallback. Without it an unknown API path would reach the SPA fallback and answer a `fetch()` with index.html and a 200
+- The dashboard is served from `DASHBOARD_DIR` (default `dashboard/dist`, resolved against the working directory) with an index.html fallback, so client-side deep links and refreshes work
+- The server handles SIGTERM and Ctrl-C, so `docker stop` and `systemctl restart` exit cleanly rather than being killed
 - Server assumes every agent is on port 8080 (`AGENT_PORT` in `server/src/services/mod.rs`); `devices` has no port column, so an agent moved off the default is unreachable
 - Heartbeat broadcasts only when a device's state or current video actually changes, not every 10s tick — `last_seen` is still persisted each round
 - A device is marked Offline only after 30s of silence, and announced once; `last_seen` is left at its old value so it records when the device was last actually seen

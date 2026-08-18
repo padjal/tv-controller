@@ -54,7 +54,7 @@ mod tests {
 
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let addr: SocketAddr = listener.local_addr().unwrap();
-            let router = app(state.clone());
+            let router = app(state.clone(), None);
             tokio::spawn(async move {
                 let _ = axum::serve(listener, router).await;
             });
