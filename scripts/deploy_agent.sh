@@ -13,6 +13,10 @@
 #
 # Requires `cross` (cargo install cross) and a running Docker, or set
 # USE_CARGO=1 if your host already has the target's linker installed.
+#
+# The install step runs sudo over a non-interactive ssh session, so the account
+# needs passwordless sudo — the default on Raspberry Pi OS. If yours prompts,
+# add a NOPASSWD rule or install the binary by hand.
 
 set -euo pipefail
 

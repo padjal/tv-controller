@@ -7,9 +7,9 @@ See `docs/coding-plan.md` for full task breakdown.
 ## Current state
 - Phase 1 complete: `shared` crate with all wire types, TS export test passing, 10 `.ts` files in `dashboard/src/types/`
 - Phase 2 complete: `pi-agent` — config, mpv IPC client, axum router, main with registration retry, systemd deploy files. Verified on Pi 5: health, status, play, pause, resume, stop all working over HTTP.
-- Phase 3 complete: server — db, AppState, video_scan, fan_out, heartbeat, device/video/playback/SSE handlers, router and main. 95 tests. Verified live: all three `scripts/test/server/*.sh` suites pass against a running server, SSE carries events from all four sources, SIGTERM shuts down cleanly. `main` serves `/api` on `PORT` (default 8000) and runs the scanner + heartbeat; static file serving lands in 3.10.
+- Phase 3 complete: server — db, AppState, video_scan, fan_out, heartbeat, device/video/playback/SSE handlers, router and main. 98 tests. Verified live: all three `scripts/test/server/*.sh` suites pass against a running server, SSE carries events from all four sources, SIGTERM shuts down cleanly. `main` serves `/api` on `PORT` (default 8000) and runs the scanner + heartbeat; static file serving lands in 3.10.
 - Phase 4 complete: dashboard — `useSSE`, `api.ts`, TVGrid, VideoLibrary, CommandBar, build integration. 69 tests. Built output is served by the Rust server; playback drives real agents end to end.
-- Phase 5 (deployment) not started — `scripts/setup_pi.sh`, `scripts/deploy_agent.sh`, `docker-compose.yml`.
+- Phase 5 complete: deployment — `scripts/setup_pi.sh`, `scripts/deploy_agent.sh`, `Dockerfile`, `docker-compose.yml`, `.env.example`. Documentation: `README.md`, `docs/deployment.md`, `docs/user-guide.md`. None of it has been run yet: Docker is not installed on this machine and no Pi has been provisioned from the scripts.
 
 ## Conventions
 - All errors use `anyhow::Result` — no unwrap() outside tests
@@ -63,6 +63,15 @@ See `docs/coding-plan.md` for full task breakdown.
 - The stale-`Playing`-after-reboot case (registration preserves playback state) is corrected by the heartbeat within one poll — covered by a test in `heartbeat.rs`
 - Agents report `current_video_id` (a Uuid) but `devices.current_video` stores the filename the dashboard displays, so the heartbeat resolves ids via one `list_videos` query per round
 - Handler errors go through `server/src/error.rs` and always respond as JSON `{"error": "..."}`; `anyhow::Error` becomes a 500 with the full cause chain logged, not sent. `ApiError::not_found` / `bad_request` for 404/400
+- The plan's `setup_pi.sh` sketch installed `ffprobe` as an apt package and created a locked-down `tv-agent` user. Neither survived: `ffprobe` ships inside `ffmpeg` and is a *server* dependency (the agent never reads durations), and a `/bin/false` user cannot hold the display. The script installs `mpv` only and runs the agent as an existing login account, default `pi`
+- The agent spawns `mpv` with no `--vo` flag, so display output is configured outside the code — `~/.config/mpv/mpv.conf` (written by `setup_pi.sh`: `vo=gpu`, `gpu-context=drm`, fullscreen) plus the unit's environment. That is the fix for the silent-playback issue: on Pi OS Lite there is no DISPLAY to set, mpv has to drive KMS/DRM directly, and the run user needs the `video`/`render` groups
+- `tv-agent.service` hardcodes `HOME` and `XDG_RUNTIME_DIR` for `pi`; `setup_pi.sh` rewrites all three (User, HOME, uid) when `RUN_USER` differs. Editing the unit means keeping that sed in step
+- `/etc/tv-agent/device.id` is the device's identity across reboots, so it MUST be deleted before imaging an SD card — every Pi cloned from an image containing it registers as the same device. Called out in `docs/deployment.md`
+- `deploy_agent.sh` defaults to `aarch64-unknown-linux-gnu` (the plan said armv7; the verified hardware is a Pi 5). It stages through `/tmp` because a running binary cannot be overwritten in place, and needs passwordless sudo since it installs over non-interactive ssh
+- The Dockerfile builds the dashboard and server from source in separate stages, so the image never depends on someone having run `npm run build`. No `DATABASE_URL` is needed at build time — the server uses runtime queries, not `sqlx::query!`, though `migrate!` does embed `server/migrations` at compile time
+- compose mounts `./videos` read-only (the server only reads it, and `ro` sidesteps host/container ownership) and keeps the database in a named volume. The plan's `./tv-controller.db` file mount was dropped: Docker creates a *directory* under that name when the file is missing
+- `docker-compose.yml` fails fast with a message if `SERVER_BASE_URL` is unset, matching the server's own refusal to start without it
+- There is no authentication anywhere — anyone who can reach a Pi on 8080 controls it directly, bypassing the server. LAN-only by design; stated plainly in `docs/deployment.md`
 - `DELETE /api/devices/:id` publishes no SSE event — `SseKind` has no removed variant, so other open dashboards keep the tile until they refresh. Adding one means a `shared` change plus regenerating TS
 
 ## Test scripts

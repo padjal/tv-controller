@@ -79,7 +79,7 @@ Day-to-day operation: **[docs/user-guide.md](docs/user-guide.md)**.
 ## Development
 
 ```bash
-cargo test --workspace          # 106 tests
+cargo test --workspace          # 109 tests
 cargo clippy -- -D warnings
 
 cd dashboard
