@@ -11,6 +11,9 @@ services:
     image: tv-controller-server
     container_name: tv-controller
     ports:
+      # host:container — the container side is fixed at 8000 (the image sets
+      # ENV PORT=8000, and compose's .env is only interpolated here, never
+      # injected into the container). Change only the host side, via PORT.
       - "${PORT:-8000}:8000"
     environment:
       # Required. The address the Pi agents use to reach this machine: it is
