@@ -7,7 +7,7 @@ See `docs/coding-plan.md` for full task breakdown.
 ## Current state
 - Phase 1 complete: `shared` crate with all wire types, TS export test passing, 10 `.ts` files in `dashboard/src/types/`
 - Phase 2 complete: `pi-agent` — config, mpv IPC client, axum router, main with registration retry, systemd deploy files. Verified on Pi 5: health, status, play, pause, resume, stop all working over HTTP.
-- Phase 3 (server) in progress: 3.1 db, 3.2 AppState, 3.3 video_scan, 3.4 fan_out, 3.5 heartbeat done. Next: 3.6 device handlers. No router or handlers yet — `main` currently starts the scanner and heartbeat and nothing else.
+- Phase 3 (server) in progress: 3.1 db, 3.2 AppState, 3.3 video_scan, 3.4 fan_out, 3.5 heartbeat, 3.6 device handlers done. Next: 3.7 video handlers. `main` serves `/api` on `PORT` (default 8000) and runs the scanner + heartbeat; static file serving lands in 3.10.
 - Phase 4 (dashboard), Phase 5 (deployment) not started
 
 ## Conventions
@@ -34,6 +34,8 @@ See `docs/coding-plan.md` for full task breakdown.
 - A device is marked Offline only after 30s of silence, and announced once; `last_seen` is left at its old value so it records when the device was last actually seen
 - The stale-`Playing`-after-reboot case (registration preserves playback state) is corrected by the heartbeat within one poll — covered by a test in `heartbeat.rs`
 - Agents report `current_video_id` (a Uuid) but `devices.current_video` stores the filename the dashboard displays, so the heartbeat resolves ids via one `list_videos` query per round
+- Handler errors go through `server/src/error.rs` and always respond as JSON `{"error": "..."}`; `anyhow::Error` becomes a 500 with the full cause chain logged, not sent. `ApiError::not_found` / `bad_request` for 404/400
+- `DELETE /api/devices/:id` publishes no SSE event — `SseKind` has no removed variant, so other open dashboards keep the tile until they refresh. Adding one means a `shared` change plus regenerating TS
 
 ## Test scripts
 Bash scripts live in `scripts/test/<component>/`. Run from Git Bash on Windows or directly on the relevant host. All require `curl` and `jq`.
@@ -41,7 +43,9 @@ Bash scripts live in `scripts/test/<component>/`. Run from Git Bash on Windows o
 - `scripts/test/pi-agent/play.sh [PI_HOST] [VIDEO_PATH]` — trigger playback
 - `scripts/test/pi-agent/status.sh [PI_HOST]` — show current state
 
-`PI_HOST` defaults to `192.168.1.11`, `VIDEO_PATH` defaults to `/tmp/test.mp4`. Override via env var or positional arg.
+- `scripts/test/server/devices.sh [SERVER_HOST]` — register (twice, for idempotency) → list → get → 404 → 400 → delete
+
+`PI_HOST` defaults to `192.168.1.11`, `VIDEO_PATH` defaults to `/tmp/test.mp4`, `SERVER_HOST` defaults to `127.0.0.1` (port 8000). Override via env var or positional arg.
 
 When adding new endpoints in any phase, add a corresponding script here.
 

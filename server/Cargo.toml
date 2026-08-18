@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 shared             = { workspace = true }
 tokio              = { workspace = true }
+axum               = { workspace = true }
 sqlx               = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }
@@ -18,8 +19,3 @@ anyhow             = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 dotenvy            = { workspace = true }
-
-# axum moves to [dependencies] with the router in Task 3.6; for now it only
-# backs the stub agents in the fan_out tests.
-[dev-dependencies]
-axum               = { workspace = true }
