@@ -1,7 +1,9 @@
 use anyhow::{anyhow, Result};
 use shared::{AgentStatus, DeviceState};
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Duration;
+use uuid::Uuid;
 
 // AtomicU64 counter used only on Unix where the IPC socket is available.
 #[cfg(unix)]
@@ -30,18 +32,37 @@ pub struct MpvClient {
     socket_path: PathBuf,
     #[cfg_attr(not(unix), allow(dead_code))]
     ipc_timeout: Duration,
+    /// Which video the server last told us to play.
+    ///
+    /// mpv knows the *URL* it loaded, but the dashboard needs the video's id,
+    /// and mpv has no idea about those — so the agent remembers the id from
+    /// the `PlayCommand` that started this playback. Reported back through
+    /// `get_status`, which is what lets the dashboard keep showing a title
+    /// after the first heartbeat.
+    ///
+    /// A `std::sync::Mutex` rather than tokio's: it is only ever held for a
+    /// read or a write of one `Option`, never across an await.
+    current_video_id: Mutex<Option<Uuid>>,
 }
 
 impl MpvClient {
     pub fn new(socket_path: impl Into<PathBuf>) -> Self {
-        Self { socket_path: socket_path.into(), ipc_timeout: IPC_TIMEOUT }
+        Self {
+            socket_path: socket_path.into(),
+            ipc_timeout: IPC_TIMEOUT,
+            current_video_id: Mutex::new(None),
+        }
     }
 
     /// The same client with a shorter fuse, so the timeout test does not have
     /// to sleep out a whole [`IPC_TIMEOUT`].
     #[cfg(test)]
     fn with_ipc_timeout(socket_path: impl Into<PathBuf>, ipc_timeout: Duration) -> Self {
-        Self { socket_path: socket_path.into(), ipc_timeout }
+        Self {
+            socket_path: socket_path.into(),
+            ipc_timeout,
+            current_video_id: Mutex::new(None),
+        }
     }
 
     /// Checks whether mpv is already responsive; spawns it if not.
@@ -166,18 +187,25 @@ impl MpvClient {
     /// After rather than before, because setting it while the previous file is
     /// still loaded resumes *that* file for the moment before `loadfile`
     /// replaces it, flashing the old content onto the screen.
-    pub async fn play(&self, url: &str) -> Result<()> {
+    pub async fn play(&self, url: &str, video_id: Uuid) -> Result<()> {
         self.send_command(serde_json::json!({"command": ["set_property", "loop-file", "inf"]}))
             .await?;
         self.send_command(serde_json::json!({"command": ["loadfile", url, "replace"]}))
             .await?;
         self.send_command(serde_json::json!({"command": ["set_property", "pause", false]}))
             .await?;
+        // Recorded only once the commands above succeeded — claiming a video
+        // we failed to load would put a title on the dashboard for a TV that
+        // is showing nothing.
+        *self.current_video_id.lock().expect("video id lock poisoned") = Some(video_id);
         Ok(())
     }
 
     pub async fn stop(&self) -> Result<()> {
         self.send_command(serde_json::json!({"command": ["stop"]})).await?;
+        // pause/resume deliberately leave this alone — only stop and playing
+        // something else change what is on screen.
+        *self.current_video_id.lock().expect("video id lock poisoned") = None;
         Ok(())
     }
 
@@ -225,9 +253,20 @@ impl MpvClient {
             DeviceState::Playing
         };
 
+        // mpv is the authority on whether anything is loaded at all. If it
+        // went idle behind our back — someone stopped it on the Pi, or it
+        // crashed and respawned — our remembered id is stale, and reporting it
+        // would leave a title on a tile showing nothing.
+        let current_video_id = if idle {
+            *self.current_video_id.lock().expect("video id lock poisoned") = None;
+            None
+        } else {
+            *self.current_video_id.lock().expect("video id lock poisoned")
+        };
+
         Ok(AgentStatus {
             state,
-            current_video_id: None,
+            current_video_id,
             position_secs,
             duration_secs,
         })
@@ -329,26 +368,38 @@ mod tests {
         );
     }
 
-    /// A fake mpv that answers every command with success and records what it
-    /// was asked. Each `send_command` opens its own connection, so this has to
-    /// keep accepting rather than serving a single stream.
-    fn recording_mpv(path: PathBuf) -> std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>> {
+    /// A fake mpv that records every command and answers `get_property` from
+    /// `props`, so a test can put mpv into a specific state. Anything else
+    /// succeeds with a null result. Each `send_command` opens its own
+    /// connection, so this keeps accepting rather than serving one stream.
+    fn fake_mpv(
+        path: PathBuf,
+        props: serde_json::Value,
+    ) -> std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>> {
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let listener = UnixListener::bind(&path).unwrap();
         let recorded = seen.clone();
         tokio::spawn(async move {
             loop {
                 let Ok((stream, _)) = listener.accept().await else { return };
-                let recorded = recorded.clone();
+                let (recorded, props) = (recorded.clone(), props.clone());
                 tokio::spawn(async move {
                     let (read_half, mut write_half) = tokio::io::split(stream);
                     let mut lines = BufReader::new(read_half).lines();
                     while let Ok(Some(line)) = lines.next_line().await {
                         let req: serde_json::Value = serde_json::from_str(&line).unwrap();
                         let id = req["request_id"].as_u64().unwrap();
-                        recorded.lock().unwrap().push(req["command"].clone());
+                        let cmd = req["command"].clone();
+                        recorded.lock().unwrap().push(cmd.clone());
+
+                        let data = match (cmd[0].as_str(), cmd[1].as_str()) {
+                            (Some("get_property"), Some(name)) => {
+                                props.get(name).cloned().unwrap_or(serde_json::Value::Null)
+                            }
+                            _ => serde_json::Value::Null,
+                        };
                         let reply =
-                            serde_json::json!({"data": null, "error": "success", "request_id": id});
+                            serde_json::json!({"data": data, "error": "success", "request_id": id});
                         let _ = write_half.write_all(format!("{reply}\n").as_bytes()).await;
                     }
                 });
@@ -360,10 +411,13 @@ mod tests {
     #[tokio::test]
     async fn play_arms_the_loop_loads_then_clears_pause() {
         let path = socket_path("loop");
-        let seen = recording_mpv(path.clone());
+        let seen = fake_mpv(path.clone(), serde_json::json!({}));
 
         let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
-        client.play("http://server:8000/videos/promo.mp4").await.unwrap();
+        client
+            .play("http://server:8000/videos/promo.mp4", Uuid::new_v4())
+            .await
+            .unwrap();
 
         let commands = seen.lock().unwrap().clone();
         assert_eq!(
@@ -376,6 +430,60 @@ mod tests {
             "play must arm the loop before loading (a short clip can otherwise end \
              first) and clear pause after (clearing it before resumes the outgoing \
              file for a moment, flashing old content)"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn status_reports_the_video_that_play_was_given() {
+        let path = socket_path("vid");
+        // Not idle and not paused: something is genuinely on screen.
+        let _seen = fake_mpv(
+            path.clone(),
+            serde_json::json!({"idle-active": false, "pause": false}),
+        );
+        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        let video_id = Uuid::new_v4();
+
+        client
+            .play("http://server:8000/videos/promo.mp4", video_id)
+            .await
+            .unwrap();
+        let status = client.get_status().await.unwrap();
+
+        // The whole point: the heartbeat overwrites devices.current_video with
+        // whatever this says, so a None here wipes the title off the dashboard
+        // one poll after playback starts.
+        assert_eq!(status.current_video_id, Some(video_id));
+        assert_eq!(status.state, DeviceState::Playing);
+
+        client.stop().await.unwrap();
+        assert_eq!(
+            client.get_status().await.unwrap().current_video_id,
+            None,
+            "stop must clear the video, not leave a stale title on the tile"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn status_forgets_the_video_when_mpv_went_idle_on_its_own() {
+        let path = socket_path("idle");
+        // mpv reports nothing loaded — stopped on the Pi, or crashed and
+        // respawned. Our remembered id is stale and must not be reported.
+        let _seen = fake_mpv(path.clone(), serde_json::json!({"idle-active": true}));
+        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+
+        client
+            .play("http://server:8000/videos/promo.mp4", Uuid::new_v4())
+            .await
+            .unwrap();
+        let status = client.get_status().await.unwrap();
+
+        assert_eq!(status.state, DeviceState::Idle);
+        assert_eq!(
+            status.current_video_id, None,
+            "mpv is the authority on whether anything is loaded"
         );
         let _ = std::fs::remove_file(&path);
     }
