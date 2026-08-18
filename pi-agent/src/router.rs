@@ -53,6 +53,15 @@ async fn handle_play(
     State(mpv): State<Arc<MpvClient>>,
     Json(cmd): Json<PlayCommand>,
 ) -> AppResult<OkResponse> {
+    // main spawns mpv at startup, but nothing supervises it after that —
+    // systemd watches this process, not its child. Re-checking here is what
+    // makes a crashed mpv recoverable: the next play respawns it instead of
+    // the TV staying dead until someone restarts the unit.
+    //
+    // A respawn waits up to 5 s for the IPC socket, which is the server's own
+    // per-command ceiling, so the play that triggers a respawn may be reported
+    // as failed even though mpv came up. The retry then succeeds.
+    mpv.ensure_running().await?;
     mpv.play(&cmd.url).await?;
     Ok(Json(OkResponse { ok: true }))
 }
