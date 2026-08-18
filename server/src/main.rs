@@ -1,4 +1,5 @@
 mod db;
+mod services;
 mod state;
 
 use anyhow::Result;
@@ -23,6 +24,19 @@ async fn main() -> Result<()> {
         "database ready ({database_url}): {} device(s) registered",
         devices.len()
     );
+
+    // The watcher scans once before it starts watching, so the library is
+    // populated by the time the first request can arrive.
+    let scanner = tokio::spawn({
+        let state = state.clone();
+        async move {
+            if let Err(err) = services::video_scan::watch(state).await {
+                tracing::error!(%err, "video scanner stopped");
+            }
+        }
+    });
+
+    scanner.await?;
 
     Ok(())
 }

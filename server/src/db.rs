@@ -213,6 +213,33 @@ pub async fn get_video_by_filename(db: &Db, filename: &str) -> Result<Option<Vid
     row.map(row_to_video).transpose()
 }
 
+/// Every known filename. The scanner diffs this against the directory to find
+/// rows whose file has been deleted.
+pub async fn list_video_filenames(db: &Db) -> Result<Vec<String>> {
+    let rows = sqlx::query("SELECT filename FROM videos")
+        .fetch_all(db)
+        .await
+        .context("failed to list video filenames")?;
+
+    rows.into_iter()
+        .map(|r| {
+            r.try_get("filename")
+                .context("invalid filename in database")
+        })
+        .collect()
+}
+
+/// Remove a video row. Returns `true` if a row was actually deleted.
+pub async fn delete_video_by_filename(db: &Db, filename: &str) -> Result<bool> {
+    let res = sqlx::query("DELETE FROM videos WHERE filename = ?1")
+        .bind(filename)
+        .execute(db)
+        .await
+        .context("failed to delete video")?;
+
+    Ok(res.rows_affected() > 0)
+}
+
 /// Return the on-disk size the scanner previously recorded for `filename`, if
 /// any. Lets the scanner skip re-probing files that have not changed.
 pub async fn video_size(db: &Db, filename: &str) -> Result<Option<u64>> {
