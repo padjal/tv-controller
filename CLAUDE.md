@@ -8,7 +8,7 @@ See `docs/coding-plan.md` for full task breakdown.
 - Phase 1 complete: `shared` crate with all wire types, TS export test passing, 10 `.ts` files in `dashboard/src/types/`
 - Phase 2 complete: `pi-agent` — config, mpv IPC client, axum router, main with registration retry, systemd deploy files. Verified on Pi 5: health, status, play, pause, resume, stop all working over HTTP.
 - Phase 3 complete: server — db, AppState, video_scan, fan_out, heartbeat, device/video/playback/SSE handlers, router and main. 95 tests. Verified live: all three `scripts/test/server/*.sh` suites pass against a running server, SSE carries events from all four sources, SIGTERM shuts down cleanly. `main` serves `/api` on `PORT` (default 8000) and runs the scanner + heartbeat; static file serving lands in 3.10.
-- Phase 4 (dashboard) in progress: 4.1 `useSSE.ts`, 4.2 `api.ts`, 4.3 `TVGrid.tsx` done, 4.6 build integration done early (needed to verify the rest). 35 tests. Next: 4.4 VideoLibrary, 4.5 CommandBar.
+- Phase 4 (dashboard) in progress: 4.1 `useSSE.ts`, 4.2 `api.ts`, 4.3 `TVGrid.tsx`, 4.4 `VideoLibrary.tsx` done, 4.6 build integration done early (needed to verify the rest). 52 tests. Next: 4.5 CommandBar, which is the last of the phase.
 - Phase 5 (deployment) not started.
 
 ## Conventions
@@ -50,6 +50,8 @@ See `docs/coding-plan.md` for full task breakdown.
 - Tiles are `<button aria-pressed>` rather than clickable divs, so selection works from the keyboard
 - Dashboard styling is plain CSS: tokens and shell in `src/index.css`, one CSS file per component. No CSS framework
 - The dashboard UI has never been opened in a real browser — tests are jsdom, so behaviour is covered but visual layout is not
+- `VideoLibrary` uses native radio inputs (visually hidden, row styled via `:focus-within`) so single-select, arrow-key navigation and screen-reader announcement come for free
+- `VideoLibrary` clears the selection when the selected file is pruned from disk, but only once a fetch has succeeded — an empty list while loading or after an error is not evidence the file is gone, and clearing on that wipes the selection on every remount
 - Server assumes every agent is on port 8080 (`AGENT_PORT` in `server/src/services/mod.rs`); `devices` has no port column, so an agent moved off the default is unreachable
 - Heartbeat broadcasts only when a device's state or current video actually changes, not every 10s tick — `last_seen` is still persisted each round
 - A device is marked Offline only after 30s of silence, and announced once; `last_seen` is left at its old value so it records when the device was last actually seen

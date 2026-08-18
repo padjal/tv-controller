@@ -75,6 +75,20 @@ body {
   color: var(--state-offline);
 }
 
+/* Grid beside library on a wide screen, stacked on a narrow one. */
+.app__layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (min-width: 60rem) {
+  .app__layout {
+    grid-template-columns: 1fr 22rem;
+  }
+}
+
 button {
   font: inherit;
 }

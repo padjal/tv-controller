@@ -1,14 +1,16 @@
 import { useCallback, useState } from "react";
 import { TVGrid } from "./components/TVGrid";
+import { VideoLibrary } from "./components/VideoLibrary";
 
 /**
  * Owns the selection that CommandBar acts on. Device and video lists live in
  * the components that render them.
  *
- * VideoLibrary and CommandBar arrive in tasks 4.4 and 4.5.
+ * CommandBar arrives in task 4.5.
  */
 export function App() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
 
   const toggle = useCallback((id: string) => {
     setSelectedIds((current) => {
@@ -20,6 +22,10 @@ export function App() {
     });
   }, []);
 
+  // Stable, so VideoLibrary's "selected file vanished" effect does not re-run
+  // on every render.
+  const selectVideo = useCallback((videoId: string | null) => setSelectedVideoId(videoId), []);
+
   return (
     <main className="app">
       <header className="app__header">
@@ -29,7 +35,10 @@ export function App() {
         </span>
       </header>
 
-      <TVGrid selectedIds={selectedIds} onToggle={toggle} />
+      <div className="app__layout">
+        <TVGrid selectedIds={selectedIds} onToggle={toggle} />
+        <VideoLibrary selectedVideoId={selectedVideoId} onSelect={selectVideo} />
+      </div>
     </main>
   );
 }

@@ -1,0 +1,81 @@
+.library {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--surface);
+}
+
+.library__title {
+  margin: 0 0 0.6rem;
+  font-size: 0.95rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.library__list {
+  /* Scrolls on its own so a long library never pushes the grid off screen. */
+  max-height: 60vh;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.library__row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 0.4rem;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.library__row:hover {
+  background: var(--surface-raised);
+}
+
+/* The radio itself is visually hidden but still focusable, so keyboard users
+   get a ring on the row via :focus-within. */
+.library__radio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.library__row:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.library__row--selected {
+  background: var(--surface-raised);
+  border-color: var(--accent);
+}
+
+.library__filename {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library__meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.library__note {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.library__note--error {
+  color: var(--danger);
+}
