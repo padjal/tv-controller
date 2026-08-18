@@ -163,6 +163,38 @@ else
 fi
 chown -R "$RUN_USER":"$RUN_USER" "$USER_HOME/.config"
 
+step "Tuning mpv for streaming playback"
+# The agent hands mpv an HTTP URL on the server, so every frame arrives over
+# the LAN for the whole playback. mpv's defaults read barely ahead of the
+# picture, so a brief Wi-Fi stall shows up as a frozen frame and a dropped
+# connection never recovers on its own.
+#
+# Appended rather than folded into the block above, because that block leaves
+# an existing mpv.conf alone — a Pi provisioned before this tuning existed
+# would otherwise never get it. The marker keeps a re-run from adding it twice.
+MPV_TUNING_MARKER='# --- tv-controller streaming tuning ---'
+if grep -qF "$MPV_TUNING_MARKER" "$MPV_CONF_DIR/mpv.conf" 2>/dev/null; then
+  echo "Streaming tuning already present in $MPV_CONF_DIR/mpv.conf"
+else
+  cat >> "$MPV_CONF_DIR/mpv.conf" <<MPVTUNING
+
+$MPV_TUNING_MARKER
+# Read ahead, so a short network stall drains the buffer instead of the screen.
+cache=yes
+cache-secs=30
+demuxer-max-bytes=200MiB
+# Reconnect rather than sitting on a dead HTTP connection to the server.
+stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5
+# Use a hardware decoder where there is one to use. A Pi 5 has no H.264 block
+# at all (HEVC only), so high-bitrate H.264 still decodes on the CPU — if it
+# still stutters with this set, the file's bitrate is the problem.
+hwdec=auto-safe
+MPVTUNING
+  echo "Appended streaming tuning to $MPV_CONF_DIR/mpv.conf"
+fi
+# Appending leaves ownership alone, but be explicit in case the file was new.
+chown "$RUN_USER":"$RUN_USER" "$MPV_CONF_DIR/mpv.conf"
+
 step "Installing the systemd unit"
 # The shipped unit is written for the default `pi` account; User, HOME and
 # XDG_RUNTIME_DIR all have to agree with whoever actually runs it.
