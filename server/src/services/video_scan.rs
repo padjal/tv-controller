@@ -58,11 +58,16 @@ pub struct ScanSummary {
     pub pruned: usize,
     /// Files present and already up to date.
     pub unchanged: usize,
+    /// Posters generated for files that were otherwise unchanged.
+    pub thumbnailed: usize,
 }
 
 impl ScanSummary {
     pub fn changed(&self) -> bool {
-        self.upserted > 0 || self.pruned > 0
+        // Backfilled posters count: without this the first scan after an
+        // upgrade generates every thumbnail and tells nobody, so an open
+        // dashboard keeps showing empty boxes until someone reloads it.
+        self.upserted > 0 || self.pruned > 0 || self.thumbnailed > 0
     }
 }
 
@@ -121,6 +126,25 @@ pub async fn scan_once(state: &AppState) -> Result<ScanSummary> {
         // An unchanged size means an unchanged file, so skip the ffprobe call.
         if db::video_size(&state.db, &filename).await? == Some(size) {
             summary.unchanged += 1;
+
+            // ...but still backfill a missing poster. Generation hangs off the
+            // upsert below, and this branch is exactly the case where that
+            // never runs again: a library indexed before thumbnails existed,
+            // or one whose thumbnails directory was cleared, would otherwise
+            // stay poster-less forever because nothing about the files is
+            // changing. Costs one `exists` check per file per scan.
+            let thumb = thumbnail_path(state, &filename);
+            if !thumb.exists() {
+                // Duration comes from the row rather than a fresh ffprobe —
+                // it was recorded when the file was first indexed.
+                let duration = db::get_video_by_filename(&state.db, &filename)
+                    .await?
+                    .and_then(|video| video.duration_secs);
+                generate_thumbnail(&path, &thumb, duration).await;
+                if thumb.is_file() {
+                    summary.thumbnailed += 1;
+                }
+            }
             continue;
         }
 
@@ -649,6 +673,52 @@ mod tests {
             thumbnail_path(&t.state, "blink.mp4").is_file(),
             "the fallback to frame zero did not produce a thumbnail"
         );
+    }
+
+    #[tokio::test]
+    async fn a_library_indexed_before_thumbnails_existed_gets_them_backfilled() {
+        if ffmpeg_missing() {
+            return;
+        }
+        let t = TempDirs::new().await;
+        assert!(t.real_video("clip.mp4", 3), "could not synthesise a video");
+
+        scan_once(&t.state).await.unwrap();
+        let thumb = thumbnail_path(&t.state, "clip.mp4");
+        assert!(thumb.is_file());
+
+        // Stand in for a library indexed by an older build: the row and the
+        // file are both intact and unchanged, only the poster is missing.
+        std::fs::remove_file(&thumb).unwrap();
+
+        let summary = scan_once(&t.state).await.unwrap();
+
+        assert_eq!(summary.upserted, 0, "nothing about the file changed");
+        assert_eq!(summary.unchanged, 1);
+        assert_eq!(summary.thumbnailed, 1);
+        assert!(thumb.is_file(), "the poster was not backfilled");
+        assert!(
+            summary.changed(),
+            "a backfilled poster must wake the dashboard, or it shows empty \
+             boxes until someone reloads"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_backfilled_scan_with_nothing_to_do_stays_quiet() {
+        if ffmpeg_missing() {
+            return;
+        }
+        let t = TempDirs::new().await;
+        assert!(t.real_video("clip.mp4", 3), "could not synthesise a video");
+        scan_once(&t.state).await.unwrap();
+
+        // Poster already present: the rescan must not regenerate it or claim
+        // the library changed, which would wake every dashboard every scan.
+        let second = scan_once(&t.state).await.unwrap();
+
+        assert_eq!(second.thumbnailed, 0);
+        assert!(!second.changed());
     }
 
     #[tokio::test]
