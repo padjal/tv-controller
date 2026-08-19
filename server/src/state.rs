@@ -47,6 +47,13 @@ pub struct AppState {
     /// `http://192.168.1.10:8000`. Stored without a trailing slash.
     pub server_base_url: String,
     pub videos_dir: PathBuf,
+    /// Where generated poster frames are written and served from.
+    ///
+    /// Deliberately *not* inside `videos_dir`: ServeDir hands out everything in
+    /// that directory, and the scanner would then have to skip its own output.
+    /// Under the data directory it shares the database's volume instead, so
+    /// thumbnails survive a container restart.
+    pub thumbnails_dir: PathBuf,
 }
 
 impl AppState {
@@ -54,6 +61,7 @@ impl AppState {
         db: Db,
         server_base_url: &str,
         videos_dir: PathBuf,
+        thumbnails_dir: PathBuf,
         http: reqwest::Client,
     ) -> Arc<Self> {
         let (sse_tx, _rx) = broadcast::channel(SSE_CHANNEL_CAPACITY);
@@ -63,10 +71,12 @@ impl AppState {
             http,
             server_base_url: server_base_url.trim_end_matches('/').to_string(),
             videos_dir,
+            thumbnails_dir,
         })
     }
 
-    /// Build state from the environment: `SERVER_BASE_URL` and `VIDEOS_DIR`.
+    /// Build state from the environment: `SERVER_BASE_URL`, `VIDEOS_DIR` and
+    /// `THUMBNAILS_DIR`.
     ///
     /// `SERVER_BASE_URL` has no useful default — it is the address the Pi agents
     /// fetch video from, so a wrong guess fails at playback time on a remote
@@ -75,10 +85,15 @@ impl AppState {
         let server_base_url = std::env::var("SERVER_BASE_URL")
             .context("SERVER_BASE_URL must be set (e.g. http://192.168.1.10:8000)")?;
         let videos_dir = std::env::var("VIDEOS_DIR").unwrap_or_else(|_| "videos".to_string());
+        // Defaults under `data/` so it lands in the same volume as the SQLite
+        // file, which compose already persists.
+        let thumbnails_dir =
+            std::env::var("THUMBNAILS_DIR").unwrap_or_else(|_| "data/thumbnails".to_string());
         Ok(Self::new(
             db,
             &server_base_url,
             PathBuf::from(videos_dir),
+            PathBuf::from(thumbnails_dir),
             crate::services::fan_out::build_client()?,
         ))
     }
@@ -131,6 +146,7 @@ mod tests {
             db,
             base_url,
             PathBuf::from("videos"),
+            PathBuf::from("thumbs"),
             reqwest::Client::new(),
         )
     }

@@ -22,10 +22,15 @@ pub fn app(state: Arc<AppState>, dashboard_dir: Option<&Path>) -> Router {
     // Content-Type from the extension, handles HEAD and conditional requests,
     // and refuses to escape the directory with `..`.
     let videos = ServeDir::new(&state.videos_dir);
+    // Generated poster frames, written by the scanner. Served the same way and
+    // for the same reasons; a missing file is simply a 404, which is what the
+    // dashboard's <img> fallback expects when ffmpeg was unavailable.
+    let thumbnails = ServeDir::new(&state.thumbnails_dir);
 
     let mut router = Router::new()
         .nest("/api", api_router())
-        .nest_service("/videos", videos);
+        .nest_service("/videos", videos)
+        .nest_service("/thumbnails", thumbnails);
 
     if let Some(dir) = dashboard_dir {
         // A single-page app owns its own routing, so an unknown path has to
@@ -92,7 +97,7 @@ mod tests {
         let pool = db::connect(&format!("sqlite:{}", root.join("test.db").display()))
             .await
             .unwrap();
-        let state = AppState::new(pool, "http://host:8000", videos, reqwest::Client::new());
+        let state = AppState::new(pool, "http://host:8000", videos, root.join("thumbs"), reqwest::Client::new());
 
         let router = app(state, with_dashboard.then_some(dashboard.as_path()));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

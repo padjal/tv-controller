@@ -347,7 +347,7 @@ mod tests {
                 .build()
                 .unwrap();
 
-            let state = AppState::new(db, "http://server:8000", videos, http);
+            let state = AppState::new(db, "http://server:8000", videos, root.join("thumbs"), http);
 
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let addr: SocketAddr = listener.local_addr().unwrap();

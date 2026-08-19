@@ -27,12 +27,23 @@
 
 .library__row {
   display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
+  /* Poster beside the text, rather than the text alone stacked. */
+  flex-direction: row;
+  align-items: center;
+  gap: 0.6rem;
   padding: 0.5rem 0.6rem;
   border-radius: 0.4rem;
   cursor: pointer;
   border: 1px solid transparent;
+}
+
+.library__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  /* Lets the filename's ellipsis work: without it the flex item refuses to
+     shrink below its content width and long names overflow the panel. */
+  min-width: 0;
 }
 
 .library__row:hover {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, EVENTS_URL } from "../api";
 import { useSSE } from "../hooks/useSSE";
 import type { Device, DeviceState } from "../types";
+import { Thumbnail } from "./Thumbnail";
 import "./TVGrid.css";
 
 export interface TVGridProps {
@@ -112,6 +113,12 @@ export function TVGrid({ selectedIds, onToggle }: TVGridProps) {
               aria-pressed={selected}
               onClick={() => onToggle(device.id)}
             >
+              {/* Offline tiles show when the TV was last seen rather than a
+                  poster — whatever it was playing is no longer on screen. */}
+              <Thumbnail
+                filename={device.state === "Offline" ? null : device.current_video}
+                className="thumb--tile"
+              />
               <span className="tv-tile__name">{device.name}</span>
               <span className={`tv-tile__badge tv-tile__badge--${device.state.toLowerCase()}`}>
                 {STATE_LABEL[device.state]}

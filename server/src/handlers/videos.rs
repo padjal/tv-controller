@@ -50,7 +50,7 @@ mod tests {
             let db = db::connect(&format!("sqlite:{}", root.join("test.db").display()))
                 .await
                 .unwrap();
-            let state = AppState::new(db, "http://host:8000", videos, reqwest::Client::new());
+            let state = AppState::new(db, "http://host:8000", videos, root.join("thumbs"), reqwest::Client::new());
 
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let addr: SocketAddr = listener.local_addr().unwrap();

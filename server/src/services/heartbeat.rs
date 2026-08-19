@@ -273,6 +273,7 @@ mod tests {
                 db,
                 "http://host:8000",
                 root.join("videos"),
+                root.join("thumbs"),
                 reqwest::Client::new(),
             );
             Harness { root, state }

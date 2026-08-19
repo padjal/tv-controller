@@ -73,6 +73,7 @@ USER tvserver
 
 ENV DASHBOARD_DIR=/app/dashboard/dist \
     VIDEOS_DIR=/app/videos \
+    THUMBNAILS_DIR=/app/data/thumbnails \
     DATABASE_URL=sqlite:/app/data/tv-controller.db \
     PORT=8000
 

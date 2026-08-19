@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useState } from "react";
 import { api, EVENTS_URL } from "../api";
 import { useSSE } from "../hooks/useSSE";
 import type { Video } from "../types";
+import { Thumbnail } from "./Thumbnail";
 import { VideoPreview } from "./VideoPreview";
 import "./VideoLibrary.css";
 
@@ -136,11 +137,14 @@ export function VideoLibrary({ selectedVideoId, onSelect }: VideoLibraryProps) {
                   checked={video.id === selectedVideoId}
                   onChange={() => onSelect(video.id)}
                 />
-                <span className="library__filename" title={video.filename}>
-                  {video.filename}
-                </span>
-                <span className="library__meta">
-                  {formatDuration(video.duration_secs)} · {formatSize(video.size_bytes)}
+                <Thumbnail filename={video.filename} className="thumb--row" />
+                <span className="library__text">
+                  <span className="library__filename" title={video.filename}>
+                    {video.filename}
+                  </span>
+                  <span className="library__meta">
+                    {formatDuration(video.duration_secs)} · {formatSize(video.size_bytes)}
+                  </span>
                 </span>
               </label>
             </li>

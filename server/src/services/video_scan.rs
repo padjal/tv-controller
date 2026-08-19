@@ -34,6 +34,22 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 /// rather than once per file per scan.
 static PROBE_MISSING_LOGGED: AtomicBool = AtomicBool::new(false);
 
+/// Same idea for ffmpeg, which generates the poster frames.
+static FFMPEG_MISSING_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// Width of a generated poster frame, in pixels. Height follows the source
+/// aspect ratio, so portrait signage is not squashed into landscape.
+///
+/// 480 is comfortably more than the dashboard renders (a library row shows it
+/// at ~80px, a tile at ~200px) which leaves room for a HiDPI screen without
+/// storing anything close to a full frame.
+const THUMBNAIL_WIDTH: u32 = 480;
+
+/// ffmpeg decoding a single frame is quick, but the same corrupt or stalled
+/// file that can hang ffprobe can hang this. One bad file must not stall the
+/// scan.
+const THUMBNAIL_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ScanSummary {
     /// Files inserted or whose metadata changed.
@@ -56,6 +72,15 @@ pub async fn scan_once(state: &AppState) -> Result<ScanSummary> {
     tokio::fs::create_dir_all(dir)
         .await
         .with_context(|| format!("failed to create videos dir {}", dir.display()))?;
+
+    tokio::fs::create_dir_all(&state.thumbnails_dir)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create thumbnails dir {}",
+                state.thumbnails_dir.display()
+            )
+        })?;
 
     let mut summary = ScanSummary::default();
     let mut seen: HashSet<String> = HashSet::new();
@@ -102,6 +127,12 @@ pub async fn scan_once(state: &AppState) -> Result<ScanSummary> {
         let duration = probe_duration_secs(&path).await;
         let path_str = path.to_string_lossy().into_owned();
         db::upsert_video(&state.db, &filename, &path_str, size, duration).await?;
+
+        // Only on upsert, which the size check above already limits to new or
+        // changed files — so a steady library regenerates nothing, and a file
+        // that was replaced in place gets a poster matching its new contents.
+        generate_thumbnail(&path, &thumbnail_path(state, &filename), duration).await;
+
         summary.upserted += 1;
         tracing::info!(%filename, size, ?duration, "indexed video");
     }
@@ -110,6 +141,9 @@ pub async fn scan_once(state: &AppState) -> Result<ScanSummary> {
     // video that would 404 on the agent.
     for filename in db::list_video_filenames(&state.db).await? {
         if !seen.contains(&filename) && db::delete_video_by_filename(&state.db, &filename).await? {
+            // Best-effort: a leftover poster is harmless clutter, and nothing
+            // references it once the row is gone.
+            let _ = tokio::fs::remove_file(thumbnail_path(state, &filename)).await;
             summary.pruned += 1;
             tracing::info!(%filename, "removed video, file no longer on disk");
         }
@@ -167,6 +201,99 @@ fn is_video_file(path: &Path) -> bool {
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .is_some_and(|e| VIDEO_EXTENSIONS.contains(&e.as_str()))
+}
+
+/// Where the poster frame for `filename` lives.
+///
+/// Keyed on the filename rather than the video's id so that both the library
+/// and a TV tile can build the URL from what they already hold — `devices`
+/// stores `current_video` as a filename, not an id, so an id-keyed name would
+/// force every tile to resolve one first. `filename` is UNIQUE and comes from a
+/// flat directory listing, so it cannot collide or contain a path separator.
+pub fn thumbnail_path(state: &AppState, filename: &str) -> std::path::PathBuf {
+    state.thumbnails_dir.join(format!("{filename}.jpg"))
+}
+
+/// Extract one representative frame from `path` into `dest` as a JPEG.
+///
+/// Never fatal: a video with no poster still lists and plays, the dashboard
+/// just falls back to showing its name alone.
+async fn generate_thumbnail(path: &Path, dest: &Path, duration_secs: Option<u32>) {
+    // 10% in rather than the first frame. Signage clips routinely open on a
+    // fade from black or a blank title card, and a grid of black rectangles is
+    // worse than no thumbnails at all. Capped so a long file does not seek
+    // minutes in, floored so a very short one does not land inside the fade.
+    let seek = duration_secs.map_or(1.0, |d| f64::from(d) * 0.1).clamp(1.0, 10.0);
+
+    match run_ffmpeg(path, dest, seek).await {
+        Ok(true) => tracing::debug!(dest = %dest.display(), "generated thumbnail"),
+        Ok(false) => {
+            // Seeking past the end yields no frame and no file. That happens
+            // for anything shorter than the floor above, and for a file whose
+            // duration ffprobe could not read — so fall back to frame zero,
+            // which always exists.
+            match run_ffmpeg(path, dest, 0.0).await {
+                Ok(true) => tracing::debug!(dest = %dest.display(), "generated thumbnail at 0s"),
+                _ => tracing::warn!(
+                    path = %path.display(),
+                    "ffmpeg could not extract a thumbnail"
+                ),
+            }
+        }
+        Err(()) => {}
+    }
+}
+
+/// One ffmpeg invocation. `Ok(true)` wrote a frame, `Ok(false)` ran but
+/// produced none, `Err(())` means ffmpeg could not be run at all — already
+/// logged, and not worth retrying.
+async fn run_ffmpeg(path: &Path, dest: &Path, seek: f64) -> Result<bool, ()> {
+    let output = tokio::process::Command::new("ffmpeg")
+        // -ss before -i seeks by keyframe without decoding everything leading
+        // up to it, which is the difference between instant and minutes on a
+        // long file.
+        .args(["-nostdin", "-v", "error", "-ss", &format!("{seek:.2}")])
+        .arg("-i")
+        .arg(path)
+        .args([
+            "-frames:v",
+            "1",
+            "-vf",
+            &format!("scale={THUMBNAIL_WIDTH}:-2"),
+            "-q:v",
+            "4",
+            "-y",
+        ])
+        .arg(dest)
+        .output();
+
+    match timeout(THUMBNAIL_TIMEOUT, output).await {
+        // ffmpeg exits 0 having written nothing when the seek lands past the
+        // end, so the file has to be checked rather than trusting the status.
+        Ok(Ok(out)) if out.status.success() => Ok(dest.is_file()),
+        Ok(Ok(out)) => {
+            tracing::debug!(
+                path = %path.display(),
+                stderr = %String::from_utf8_lossy(&out.stderr).trim(),
+                "ffmpeg exited non-zero"
+            );
+            Ok(false)
+        }
+        Ok(Err(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+            if !FFMPEG_MISSING_LOGGED.swap(true, Ordering::Relaxed) {
+                tracing::warn!("ffmpeg not found on PATH; videos will be listed without thumbnails");
+            }
+            Err(())
+        }
+        Ok(Err(err)) => {
+            tracing::warn!(path = %path.display(), %err, "ffmpeg failed to run");
+            Err(())
+        }
+        Err(_) => {
+            tracing::warn!(path = %path.display(), "ffmpeg timed out generating a thumbnail");
+            Err(())
+        }
+    }
 }
 
 /// Duration in whole seconds via ffprobe, or `None` if it cannot be determined.
@@ -323,7 +450,13 @@ mod tests {
             let db = db::connect(&format!("sqlite:{}", root.join("test.db").display()))
                 .await
                 .unwrap();
-            let state = AppState::new(db, "http://host:8000", videos, reqwest::Client::new());
+            let state = AppState::new(
+                db,
+                "http://host:8000",
+                videos,
+                root.join("thumbs"),
+                reqwest::Client::new(),
+            );
             TempDirs { root, state }
         }
 
@@ -334,6 +467,32 @@ mod tests {
         fn remove(&self, name: &str) {
             std::fs::remove_file(self.state.videos_dir.join(name)).unwrap();
         }
+
+        /// A real, decodable video, as opposed to the zero-filled placeholders
+        /// the other tests use — ffmpeg has to be able to pull a frame out of
+        /// it. Returns false when ffmpeg is unavailable so the caller can skip.
+        fn real_video(&self, name: &str, seconds: u32) -> bool {
+            let status = std::process::Command::new("ffmpeg")
+                .args(["-nostdin", "-v", "error", "-f", "lavfi", "-i"])
+                .arg(format!("testsrc=size=320x240:rate=10:duration={seconds}"))
+                .args(["-pix_fmt", "yuv420p", "-y"])
+                .arg(self.state.videos_dir.join(name))
+                .status();
+            matches!(status, Ok(s) if s.success())
+        }
+    }
+
+    /// Thumbnails are a best-effort feature built on an optional binary, the
+    /// same way durations are, so their tests skip rather than fail where
+    /// ffmpeg is not installed.
+    fn ffmpeg_missing() -> bool {
+        !matches!(
+            std::process::Command::new("ffmpeg").arg("-version").output(),
+            Ok(out) if out.status.success()
+        )
+    }
+
+    impl TempDirs {
     }
 
     impl Drop for TempDirs {
@@ -444,5 +603,64 @@ mod tests {
         let summary = scan_once(&t.state).await.unwrap();
         assert_eq!(summary.upserted, 0);
         assert!(db::list_videos(&t.state.db).await.unwrap().is_empty());
+    }
+
+    // ── Thumbnails ──────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn scan_generates_a_thumbnail_and_prunes_it_with_the_video() {
+        if ffmpeg_missing() {
+            return;
+        }
+        let t = TempDirs::new().await;
+        assert!(t.real_video("clip.mp4", 3), "could not synthesise a video");
+
+        scan_once(&t.state).await.unwrap();
+
+        let thumb = thumbnail_path(&t.state, "clip.mp4");
+        assert!(thumb.is_file(), "no thumbnail at {}", thumb.display());
+        assert!(
+            std::fs::metadata(&thumb).unwrap().len() > 0,
+            "thumbnail is empty"
+        );
+
+        // Removing the video must take its poster with it, or the directory
+        // grows forever as the library turns over.
+        t.remove("clip.mp4");
+        let summary = scan_once(&t.state).await.unwrap();
+        assert_eq!(summary.pruned, 1);
+        assert!(!thumb.exists(), "thumbnail outlived its video");
+    }
+
+    #[tokio::test]
+    async fn a_clip_shorter_than_the_seek_floor_still_gets_a_thumbnail() {
+        if ffmpeg_missing() {
+            return;
+        }
+        let t = TempDirs::new().await;
+        // Under the 1s floor `generate_thumbnail` clamps to, so the first
+        // ffmpeg pass seeks past the end and writes nothing. Only the retry at
+        // frame zero produces a poster.
+        assert!(t.real_video("blink.mp4", 1), "could not synthesise a video");
+
+        scan_once(&t.state).await.unwrap();
+
+        assert!(
+            thumbnail_path(&t.state, "blink.mp4").is_file(),
+            "the fallback to frame zero did not produce a thumbnail"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_undecodable_file_is_still_indexed_without_a_thumbnail() {
+        let t = TempDirs::new().await;
+        // Zero-filled: ffmpeg can make nothing of it. The video must still
+        // list and play — a missing poster is cosmetic.
+        t.write("junk.mp4", 64);
+
+        let summary = scan_once(&t.state).await.unwrap();
+
+        assert_eq!(summary.upserted, 1);
+        assert!(!thumbnail_path(&t.state, "junk.mp4").exists());
     }
 }

@@ -18,6 +18,21 @@ export function videoFileUrl(filename: string): string {
 }
 
 /**
+ * The generated poster frame for a video, or `null` when there is no filename
+ * to build one from.
+ *
+ * Keyed on the filename rather than the video id, because `Device` carries
+ * `current_video` as a filename and has no id — so a tile can build this from
+ * what it already holds instead of resolving the library first.
+ *
+ * The server 404s when ffmpeg was unavailable or could not decode the file, so
+ * callers must handle the image failing to load.
+ */
+export function thumbnailUrl(filename: string): string {
+  return `${BASE}/thumbnails/${encodeURIComponent(filename)}.jpg`;
+}
+
+/**
  * A request the server rejected. `status` lets a caller tell apart the cases
  * the server distinguishes: 404 unknown id, 409 nothing online, 400 bad input.
  */

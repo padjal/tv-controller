@@ -1,0 +1,29 @@
+.thumb {
+  display: block;
+  flex: none;
+  border-radius: 0.25rem;
+  background: var(--surface-raised);
+  /* Posters follow the source aspect ratio, so letterbox rather than crop —
+     portrait signage would otherwise lose its top and bottom. */
+  object-fit: contain;
+}
+
+.thumb--empty {
+  /* Same footprint as a loaded image, so a library of mixed videos does not
+     jump around as posters resolve or fail. */
+  border: 1px dashed var(--line);
+  background: transparent;
+}
+
+/* A row in the video library: small, beside the filename. */
+.thumb--row {
+  width: 4rem;
+  height: 2.25rem;
+}
+
+/* A TV tile: wider, sitting above the device name. */
+.thumb--tile {
+  width: 100%;
+  height: 5.5rem;
+  background-color: #000;
+}
