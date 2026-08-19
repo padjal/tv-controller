@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useState } from "react";
 import { api, EVENTS_URL } from "../api";
 import { useSSE } from "../hooks/useSSE";
 import type { Video } from "../types";
+import { VideoPreview } from "./VideoPreview";
 import "./VideoLibrary.css";
 
 export interface VideoLibraryProps {
@@ -109,6 +110,12 @@ export function VideoLibrary({ selectedVideoId, onSelect }: VideoLibraryProps) {
           No videos found. Drop files into the server&rsquo;s videos directory and they will appear
           here.
         </p>
+      )}
+
+      {/* Resolved here rather than lifted to App: the library already owns the
+          list, and App only tracks the id. */}
+      {!loading && !error && videos.length > 0 && (
+        <VideoPreview video={videos.find((video) => video.id === selectedVideoId) ?? null} />
       )}
 
       {videos.length > 0 && (

@@ -6,6 +6,18 @@ const BASE = "";
 export const EVENTS_URL = `${BASE}/api/events`;
 
 /**
+ * Where the server serves a video file itself, as opposed to its metadata.
+ *
+ * `tower_http`'s ServeDir is mounted at `/videos` and already answers Range
+ * requests, which is what lets a browser seek in a preview without pulling the
+ * whole file. The filename is encoded because the library is full of spaces
+ * and `#`, either of which would otherwise truncate or fragment the URL.
+ */
+export function videoFileUrl(filename: string): string {
+  return `${BASE}/videos/${encodeURIComponent(filename)}`;
+}
+
+/**
  * A request the server rejected. `status` lets a caller tell apart the cases
  * the server distinguishes: 404 unknown id, 409 nothing online, 400 bad input.
  */

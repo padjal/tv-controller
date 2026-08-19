@@ -1,0 +1,36 @@
+.preview {
+  /* figure carries a default margin that would break the panel's rhythm. */
+  margin: 0.7rem 0 0;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--line);
+}
+
+.preview__player {
+  display: block;
+  width: 100%;
+  /* Signage is 16:9 or portrait depending on the file, so reserve a stable box
+     and letterbox inside it — otherwise the panel jumps height every time the
+     selection changes. */
+  aspect-ratio: 16 / 9;
+  max-height: 40vh;
+  border-radius: 0.4rem;
+  background: #000;
+  object-fit: contain;
+}
+
+.preview__caption {
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview__note {
+  margin: 0.7rem 0 0;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
