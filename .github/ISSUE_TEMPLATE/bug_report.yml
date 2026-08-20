@@ -1,0 +1,81 @@
+name: Bug report
+description: Something does not work the way it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: a few behaviours that look like bugs are deliberate and
+        documented in [CLAUDE.md](../blob/main/CLAUDE.md) under *Known issues /
+        decisions* — video looping forever, a tile staying `Playing` until it
+        is stopped, and the absence of any authentication are the usual
+        surprises. Worth a skim.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: where
+    attributes:
+      label: Which part is misbehaving
+      options:
+        - Server (API, video indexing, heartbeat)
+        - Dashboard (browser UI)
+        - Pi agent / mpv playback
+        - Provisioning or deployment scripts
+        - Docker image or compose
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: server-env
+    attributes:
+      label: Server environment
+      description: >
+        How the server runs (Docker image, compose, `cargo run`), the host OS
+        and architecture, and whether `ffmpeg`/`ffprobe` are installed.
+      placeholder: |
+        docker compose, Debian 12 on x86_64, ffmpeg present
+    validations:
+      required: true
+
+  - type: textarea
+    id: pi-env
+    attributes:
+      label: Pi environment
+      description: >
+        Only if a TV or agent is involved. Pi model, Raspberry Pi OS version,
+        whether the session is Wayland, X11 or Lite, `mpv --version`, and how
+        the agent was installed. Display session is by far the most common
+        cause of "playback reports success but the screen stays black".
+      placeholder: |
+        Pi 5, Raspberry Pi OS Bookworm Desktop, wayland-0, mpv 0.35.1,
+        installed with setup_pi.sh + deploy_agent.sh
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >
+        Server logs (`docker compose logs` or stdout) and agent logs
+        (`journalctl -u tv-agent -n 100`). Re-run with `RUST_LOG=debug` if the
+        default output says nothing useful. This will be rendered as code, so
+        no backticks needed.
+      render: shell
+
+  - type: textarea
+    id: video
+    attributes:
+      label: The video file, if playback is involved
+      description: >
+        Output of `ffprobe -hide_banner <file>`. Bitrate matters more than
+        anything else here — a Pi 5 software-decodes H.264 while streaming it
+        over HTTP, and anything much above ~8 Mbps at 1080p will stutter
+        regardless of the code.
+      render: shell

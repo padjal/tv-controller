@@ -1,0 +1,10 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security report
+    url: https://github.com/padjal/tv-controller/security/advisories/new
+    about: >
+      Report a vulnerability privately. Note that the missing authentication is
+      a documented design decision, not a vulnerability — see SECURITY.md.
+  - name: Deployment guide
+    url: https://github.com/padjal/tv-controller/blob/main/docs/deployment.md
+    about: Provisioning a Pi, cloning an SD card, and the display-session gotchas.

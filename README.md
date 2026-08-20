@@ -1,5 +1,8 @@
 # TV Controller
 
+[![CI](https://github.com/padjal/tv-controller/actions/workflows/ci.yml/badge.svg)](https://github.com/padjal/tv-controller/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Play video on a wall of TVs from one browser tab.
 
 Each TV has a Raspberry Pi behind it running a small agent that drives `mpv`.
@@ -82,12 +85,12 @@ Day-to-day operation: **[docs/user-guide.md](docs/user-guide.md)**.
 ## Development
 
 ```bash
-cargo test --workspace          # 109 tests
+cargo test --workspace          # 120 tests
 cargo clippy -- -D warnings
 
 cd dashboard
 npm ci
-npm test                        # 69 tests
+npm test                        # 80 tests
 npm run dev                     # proxies /api and /videos to localhost:8000
 ```
 
@@ -96,12 +99,44 @@ Run the server locally with `cp server/.env.example server/.env`, then
 independently.
 
 There are also endpoint scripts under `scripts/test/` that exercise a running
-server or agent with `curl` — see the list in [CLAUDE.md](CLAUDE.md).
+server or agent with `curl` — see
+[scripts/test/README.md](scripts/test/README.md).
+
+[CLAUDE.md](CLAUDE.md) is worth reading before changing anything. It is the
+running log of why this system behaves the way it does — why video loops
+forever, why offline devices get a shorter timeout, why thumbnails live
+outside the video directory — and it is the best map of the codebase there is.
 
 ## Requirements
 
 - **Server**: Docker, or a Rust toolchain and `ffmpeg` (for `ffprobe`; optional,
   it only supplies video durations)
 - **Pi**: Raspberry Pi OS, `mpv`, network access to the server
-- Everything runs on a LAN. There is no authentication — see the security note
-  in [docs/deployment.md](docs/deployment.md#a-note-on-security).
+- Everything runs on a LAN. There is no authentication — see
+  [SECURITY.md](SECURITY.md) and the security note in
+  [docs/deployment.md](docs/deployment.md#a-note-on-security).
+
+## Project status
+
+Working and in use, with the rough edges you would expect from a project of
+this size. Things worth knowing before you rely on it:
+
+- The server, the agent and the dashboard are covered by tests and have been
+  verified end to end against a Raspberry Pi 5 driving a real screen.
+- `docker compose up` itself has not been run — the image builds and runs, and
+  the compose file has only been validated with `docker compose config`.
+- `scripts/setup_pi.sh` and `scripts/deploy_agent.sh` work, but no Pi has been
+  provisioned from scratch by following the guide start to finish.
+- The dashboard's tests are jsdom, so its behaviour is covered but its visual
+  layout is not.
+
+## Contributing
+
+Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has
+the setup steps, the checks CI runs, and the handful of house rules — no
+`unwrap()` outside tests, clippy warnings are errors, and changing a shared
+type means regenerating the TypeScript.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

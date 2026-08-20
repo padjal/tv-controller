@@ -15,6 +15,7 @@ videos/
 
 .git/
 .gitignore
+.github/
 docs/
 scripts/
 *.md

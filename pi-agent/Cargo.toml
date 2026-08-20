@@ -2,6 +2,11 @@
 name    = "pi-agent"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+description = "TV Controller per-TV agent: an HTTP control surface over an mpv IPC socket"
+repository  = "https://github.com/padjal/tv-controller"
+# Workspace-internal crates with generic names; never published to crates.io.
+publish = false
 
 [dependencies]
 shared             = { workspace = true }

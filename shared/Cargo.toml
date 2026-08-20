@@ -2,6 +2,11 @@
 name    = "shared"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+description = "Wire types shared by the TV Controller server and Pi agent; exports TypeScript via ts-rs"
+repository  = "https://github.com/padjal/tv-controller"
+# Workspace-internal crates with generic names; never published to crates.io.
+publish = false
 
 [dependencies]
 serde      = { workspace = true }

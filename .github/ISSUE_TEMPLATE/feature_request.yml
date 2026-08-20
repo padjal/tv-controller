@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest a change or an addition
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: >
+        The situation, not the solution. What are you trying to get the wall of
+        TVs to do that it will not do today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: Optional. If you already have a design in mind, describe it.
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: How you work around it now
+      description: Optional, but it usually says a lot about how much this costs you.
