@@ -290,6 +290,44 @@ Two constraints, both enforced by how files are served:
 Deleting a file removes it from the library. If it was the video selected in
 the dashboard, the selection clears on the next refresh.
 
+### Encode for the weakest Pi in the fleet
+
+Every device is handed the same file, so the library has to suit the least
+capable one. Run `scripts/transcode.sh` over anything you add:
+
+```bash
+./scripts/transcode.sh videos/*.mp4              # Pi 4 / Pi 5 fleet: 1080p, 8 Mbps
+PROFILE=pi3 ./scripts/transcode.sh videos/*.mp4  # any Pi 3 or Zero 2 W: 720p, 4 Mbps
+```
+
+Files already within spec are skipped, so re-running over the whole library is
+cheap. Originals are moved to `masters/` and never overwritten — re-running
+under a different profile re-encodes from the original rather than from the
+previous encode.
+
+Two different limits decide whether playback is watchable, and which one binds
+depends on the hardware:
+
+| | Pi 3 / Zero 2 W | Pi 4 | Pi 5 |
+|---|---|---|---|
+| H.264 hardware decode | yes, via `/dev/video10` | yes, via `/dev/video10` | **none** (HEVC only) |
+| Practical resolution | 720p | 1080p | 1080p |
+| Suggested profile | `PROFILE=pi3` | default | default |
+
+On a Pi 3 the binding constraint is **resolution**, not bitrate — 1080p will
+stutter no matter how far you drop the bitrate, because the pixel rate is what
+exceeds the hardware. Dropping to 720p is the fix.
+
+`setup_pi.sh` handles the matching decoder setting itself: it probes for
+`/dev/video10` and writes `hwdec=v4l2m2m-copy` where the VideoCore decoder
+exists, because mpv's `hwdec=auto-safe` will not select it on its own and would
+silently software-decode instead. It also sizes mpv's read-ahead cache to the
+machine's RAM, so a 1 GB Pi is not pushed into swap by a 200 MB buffer.
+
+If you provisioned a Pi before these settings existed, just re-run
+`sudo ./scripts/setup_pi.sh` on it — the tuning block is replaced in place —
+then `sudo systemctl restart tv-agent`.
+
 ---
 
 ## Upgrading
