@@ -60,11 +60,11 @@ for input in "$@"; do
     # Re-running over the library must be cheap and idempotent, so anything
     # already at a sane rate is left alone. The 1.2 factor keeps a file that is
     # a hair over the cap from being re-encoded for no visible gain.
-#    if [[ "${FORCE:-}" != "1" ]] \
-#       && awk -v b="$br" -v m="$MAX_MBPS" 'BEGIN { exit !(b <= m * 1000000 * 1.2) }'; then
-#      echo "   skip     already within ${MAX_MBPS} Mbps"
-#      continue
-#    fi
+    if [[ "${FORCE:-}" != "1" ]] \
+       && awk -v b="$br" -v m="$MAX_MBPS" 'BEGIN { exit !(b <= m * 1000000 * 1.2) }'; then
+      echo "   skip     already within ${MAX_MBPS} Mbps"
+      continue
+    fi
   else
     echo "   current  unknown — encoding anyway"
   fi
