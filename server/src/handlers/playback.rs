@@ -188,6 +188,7 @@ async fn load_play_command(
     let command = PlayCommand {
         url: state.video_url(&video.filename),
         video_id: video.id,
+        kind: video.kind,
     };
     Ok((video, command))
 }

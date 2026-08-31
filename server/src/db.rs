@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 
 use anyhow::{Context, Result};
-use shared::{Device, DeviceState, RegisterRequest, Video};
+use shared::{Device, DeviceState, MediaKind, RegisterRequest, Video};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
 use sqlx::{Row, SqlitePool};
 use std::str::FromStr;
@@ -271,10 +271,17 @@ fn row_to_video(row: SqliteRow) -> Result<Video> {
     let id: String = row.try_get("id")?;
     let size_bytes: i64 = row.try_get("size_bytes")?;
     let duration_secs: Option<i64> = row.try_get("duration_secs")?;
+    let filename: String = row.try_get("filename")?;
+    // Derived, not stored. `filename` is UNIQUE and never changes for a row, so
+    // there is nothing a `kind` column could record that the name does not
+    // already say — and no way for the two to disagree. The fallback only
+    // covers a row whose extension the scanner would no longer index at all.
+    let kind = MediaKind::from_filename(&filename).unwrap_or_default();
     Ok(Video {
         id: Uuid::parse_str(&id).context("invalid video id in database")?,
-        filename: row.try_get("filename")?,
+        filename,
         duration_secs: duration_secs.map(|d| d as u32),
+        kind,
         size_bytes: size_bytes as u64,
     })
 }

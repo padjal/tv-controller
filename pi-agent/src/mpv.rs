@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use shared::{AgentStatus, DeviceState};
+use shared::{AgentStatus, DeviceState, MediaKind};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -173,6 +173,30 @@ impl MpvClient {
     /// on a black idle screen is never what is wanted — the file loops until
     /// an operator sends stop or plays something else.
     ///
+    /// Arm the right "hold on screen forever" mechanism for this media kind.
+    ///
+    /// A video loops: `loop-file=inf` restarts it at EOF. A still image has no
+    /// EOF to loop — mpv gives it `image-display-duration` seconds (1 by
+    /// default) and then moves on, leaving a black screen. The two settings are
+    /// both global and both outlive the file they were set on, so each play
+    /// sets both: switching from an image to a video without clearing
+    /// `loop-file` would leave the image's setting armed, and vice versa.
+    async fn set_loop_mode(&self, kind: MediaKind) -> Result<()> {
+        let (loop_file, image_duration) = match kind {
+            MediaKind::Video => ("inf", serde_json::json!(1.0)),
+            MediaKind::Image => ("no", serde_json::json!("inf")),
+        };
+        self.send_command(
+            serde_json::json!({"command": ["set_property", "loop-file", loop_file]}),
+        )
+        .await?;
+        self.send_command(serde_json::json!({
+            "command": ["set_property", "image-display-duration", image_duration]
+        }))
+        .await?;
+        Ok(())
+    }
+
     /// `loop-file` is set *before* `loadfile`, not after: it is a global
     /// property that outlives any one file, and setting it first means even a
     /// very short clip cannot reach its end in the gap between the two
@@ -187,9 +211,8 @@ impl MpvClient {
     /// After rather than before, because setting it while the previous file is
     /// still loaded resumes *that* file for the moment before `loadfile`
     /// replaces it, flashing the old content onto the screen.
-    pub async fn play(&self, url: &str, video_id: Uuid) -> Result<()> {
-        self.send_command(serde_json::json!({"command": ["set_property", "loop-file", "inf"]}))
-            .await?;
+    pub async fn play(&self, url: &str, video_id: Uuid, kind: MediaKind) -> Result<()> {
+        self.set_loop_mode(kind).await?;
         self.send_command(serde_json::json!({"command": ["loadfile", url, "replace"]}))
             .await?;
         self.send_command(serde_json::json!({"command": ["set_property", "pause", false]}))
@@ -409,13 +432,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn play_holds_an_image_instead_of_looping_it() {
+        let path = socket_path("image");
+        let seen = fake_mpv(path.clone(), serde_json::json!({}));
+
+        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        client
+            .play(
+                "http://server:8000/videos/logo.png",
+                Uuid::new_v4(),
+                MediaKind::Image,
+            )
+            .await
+            .unwrap();
+
+        let commands = seen.lock().unwrap().clone();
+        assert_eq!(
+            commands,
+            vec![
+                serde_json::json!(["set_property", "loop-file", "no"]),
+                serde_json::json!(["set_property", "image-display-duration", "inf"]),
+                serde_json::json!(["loadfile", "http://server:8000/videos/logo.png", "replace"]),
+                serde_json::json!(["set_property", "pause", false]),
+            ],
+            "a still has no end to loop at — without image-display-duration=inf mpv \
+             shows it for one second and then leaves a black screen"
+        );
+    }
+
+    #[tokio::test]
     async fn play_arms_the_loop_loads_then_clears_pause() {
         let path = socket_path("loop");
         let seen = fake_mpv(path.clone(), serde_json::json!({}));
 
         let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
         client
-            .play("http://server:8000/videos/promo.mp4", Uuid::new_v4())
+            .play(
+                "http://server:8000/videos/promo.mp4",
+                Uuid::new_v4(),
+                MediaKind::Video,
+            )
             .await
             .unwrap();
 
@@ -424,6 +480,7 @@ mod tests {
             commands,
             vec![
                 serde_json::json!(["set_property", "loop-file", "inf"]),
+                serde_json::json!(["set_property", "image-display-duration", 1.0]),
                 serde_json::json!(["loadfile", "http://server:8000/videos/promo.mp4", "replace"]),
                 serde_json::json!(["set_property", "pause", false]),
             ],
@@ -446,7 +503,7 @@ mod tests {
         let video_id = Uuid::new_v4();
 
         client
-            .play("http://server:8000/videos/promo.mp4", video_id)
+            .play("http://server:8000/videos/promo.mp4", video_id, MediaKind::Video)
             .await
             .unwrap();
         let status = client.get_status().await.unwrap();
@@ -475,7 +532,11 @@ mod tests {
         let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
 
         client
-            .play("http://server:8000/videos/promo.mp4", Uuid::new_v4())
+            .play(
+                "http://server:8000/videos/promo.mp4",
+                Uuid::new_v4(),
+                MediaKind::Video,
+            )
             .await
             .unwrap();
         let status = client.get_status().await.unwrap();

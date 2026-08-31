@@ -8,8 +8,8 @@ export interface VideoPreviewProps {
 }
 
 /**
- * A small player for the selected video, so an operator can see what a file
- * actually contains before putting it on a wall of TVs.
+ * A small player for the selected library entry, so an operator can see what a
+ * file actually contains before putting it on a wall of TVs.
  *
  * The server already serves the file over `/videos` with Range support, so
  * this needs nothing new from the backend — a plain `<video>` element seeks
@@ -20,6 +20,10 @@ export interface VideoPreviewProps {
  * file would put a multi-megabit stream on the LAN for a video nobody asked to
  * watch — competing with the TVs that are actually playing. Metadata alone is
  * a few KB and is enough for the browser to show a first frame and a duration.
+ *
+ * An image renders as an `<img>` against the same URL. `.preview__player`
+ * already constrains by aspect ratio with `object-fit: contain`, so a portrait
+ * still letterboxes in the same frame a video does.
  */
 export function VideoPreview({ video }: VideoPreviewProps) {
   if (video === null) {
@@ -30,20 +34,31 @@ export function VideoPreview({ video }: VideoPreviewProps) {
     );
   }
 
+  const src = videoFileUrl(video.filename);
+
   return (
     <figure className="preview">
       {/* Keyed on the id so switching selection tears the old element down
           rather than mutating src on a player that is mid-download — that
           leaves the previous video's buffer and position in place. */}
-      <video
-        key={video.id}
-        className="preview__player"
-        src={videoFileUrl(video.filename)}
-        preload="metadata"
-        controls
-        playsInline
-        aria-label={`Preview of ${video.filename}`}
-      />
+      {video.kind === "Image" ? (
+        <img
+          key={video.id}
+          className="preview__player"
+          src={src}
+          alt={`Preview of ${video.filename}`}
+        />
+      ) : (
+        <video
+          key={video.id}
+          className="preview__player"
+          src={src}
+          preload="metadata"
+          controls
+          playsInline
+          aria-label={`Preview of ${video.filename}`}
+        />
+      )}
       <figcaption className="preview__caption" title={video.filename}>
         {video.filename}
       </figcaption>

@@ -143,7 +143,11 @@ export function VideoLibrary({ selectedVideoId, onSelect }: VideoLibraryProps) {
                     {video.filename}
                   </span>
                   <span className="library__meta">
-                    {formatDuration(video.duration_secs)} · {formatSize(video.size_bytes)}
+                    {/* A still has no duration, and formatDuration renders an
+                        em dash — which reads as "runtime unknown" next to a
+                        photo rather than "not applicable". Label the kind. */}
+                    {video.kind === "Image" ? "Image" : formatDuration(video.duration_secs)} ·{" "}
+                    {formatSize(video.size_bytes)}
                   </span>
                 </span>
               </label>

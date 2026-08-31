@@ -6,6 +6,7 @@
 export type { AgentStatus } from "./AgentStatus";
 export type { Device } from "./Device";
 export type { DeviceState } from "./DeviceState";
+export type { MediaKind } from "./MediaKind";
 export type { PlayCommand } from "./PlayCommand";
 export type { PlaybackRequest } from "./PlaybackRequest";
 export type { RegisterRequest } from "./RegisterRequest";

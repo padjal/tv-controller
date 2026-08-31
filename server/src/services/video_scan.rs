@@ -13,13 +13,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use notify::{RecursiveMode, Watcher};
-use shared::SseKind;
+use shared::{MediaKind, SseKind};
 use tokio::time::timeout;
 
 use crate::db;
 use crate::state::AppState;
-
-const VIDEO_EXTENSIONS: [&str; 5] = ["mp4", "mkv", "mov", "avi", "webm"];
 
 /// How long the directory must be quiet before a rescan runs. Copying a large
 /// file in produces a burst of events, and probing it mid-copy reads a
@@ -100,9 +98,9 @@ pub async fn scan_once(state: &AppState) -> Result<ScanSummary> {
         .with_context(|| format!("failed to read videos dir {}", dir.display()))?
     {
         let path = entry.path();
-        if !is_video_file(&path) {
+        let Some(kind) = media_kind(&path) else {
             continue;
-        }
+        };
 
         // Non-UTF-8 filenames cannot round-trip through a URL; skip loudly
         // rather than storing something the agents could never fetch.
@@ -140,7 +138,7 @@ pub async fn scan_once(state: &AppState) -> Result<ScanSummary> {
                 let duration = db::get_video_by_filename(&state.db, &filename)
                     .await?
                     .and_then(|video| video.duration_secs);
-                generate_thumbnail(&path, &thumb, duration).await;
+                generate_thumbnail(&path, &thumb, duration, kind).await;
                 if thumb.is_file() {
                     summary.thumbnailed += 1;
                 }
@@ -148,17 +146,26 @@ pub async fn scan_once(state: &AppState) -> Result<ScanSummary> {
             continue;
         }
 
-        let duration = probe_duration_secs(&path).await;
+        // Images are never probed. ffprobe does not simply decline to answer
+        // for a still: a JPEG goes through the image2 demuxer and reports
+        // "0.040000" (one frame at 25fps), which rounds to Some(0) and renders
+        // as a 0:00 runtime in the library. WebP reports nothing at all, so the
+        // formats do not even agree — the only safe duration for a still is
+        // none at all.
+        let duration = match kind {
+            MediaKind::Image => None,
+            MediaKind::Video => probe_duration_secs(&path).await,
+        };
         let path_str = path.to_string_lossy().into_owned();
         db::upsert_video(&state.db, &filename, &path_str, size, duration).await?;
 
         // Only on upsert, which the size check above already limits to new or
         // changed files — so a steady library regenerates nothing, and a file
         // that was replaced in place gets a poster matching its new contents.
-        generate_thumbnail(&path, &thumbnail_path(state, &filename), duration).await;
+        generate_thumbnail(&path, &thumbnail_path(state, &filename), duration, kind).await;
 
         summary.upserted += 1;
-        tracing::info!(%filename, size, ?duration, "indexed video");
+        tracing::info!(%filename, size, ?duration, ?kind, "indexed media");
     }
 
     // Drop rows whose file is gone; otherwise the dashboard keeps offering a
@@ -220,11 +227,14 @@ pub async fn watch(state: Arc<AppState>) -> Result<()> {
     Ok(())
 }
 
-fn is_video_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .is_some_and(|e| VIDEO_EXTENSIONS.contains(&e.as_str()))
+/// What kind of media `path` holds, or `None` if the library does not index it.
+///
+/// The extension list lives in `shared` because the wire type derives its
+/// `MediaKind` from the filename too — two lists could disagree.
+fn media_kind(path: &Path) -> Option<MediaKind> {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .and_then(MediaKind::from_filename)
 }
 
 /// Where the poster frame for `filename` lives.
@@ -242,15 +252,27 @@ pub fn thumbnail_path(state: &AppState, filename: &str) -> std::path::PathBuf {
 ///
 /// Never fatal: a video with no poster still lists and plays, the dashboard
 /// just falls back to showing its name alone.
-async fn generate_thumbnail(path: &Path, dest: &Path, duration_secs: Option<u32>) {
-    // 10% in rather than the first frame. Signage clips routinely open on a
-    // fade from black or a blank title card, and a grid of black rectangles is
-    // worse than no thumbnails at all. Capped so a long file does not seek
-    // minutes in, floored so a very short one does not land inside the fade.
-    let seek = duration_secs.map_or(1.0, |d| f64::from(d) * 0.1).clamp(1.0, 10.0);
+async fn generate_thumbnail(path: &Path, dest: &Path, duration_secs: Option<u32>, kind: MediaKind) {
+    // A still has exactly one frame, so seek straight to it. Without this the
+    // heuristic below floors at 1s, seeks past the end of a 0.04s image, writes
+    // nothing, and only the frame-zero retry rescues it — the right poster, for
+    // the price of a wasted ffmpeg run on every image on every scan.
+    //
+    // 10% in for a video rather than the first frame: signage clips routinely
+    // open on a fade from black or a blank title card, and a grid of black
+    // rectangles is worse than no thumbnails at all. Capped so a long file does
+    // not seek minutes in, floored so a very short one does not land inside
+    // the fade.
+    let seek = match kind {
+        MediaKind::Image => 0.0,
+        MediaKind::Video => duration_secs.map_or(1.0, |d| f64::from(d) * 0.1).clamp(1.0, 10.0),
+    };
 
     match run_ffmpeg(path, dest, seek).await {
         Ok(true) => tracing::debug!(dest = %dest.display(), "generated thumbnail"),
+        Ok(false) if seek == 0.0 => {
+            tracing::warn!(path = %path.display(), "ffmpeg could not extract a thumbnail");
+        }
         Ok(false) => {
             // Seeking past the end yields no frame and no file. That happens
             // for anything shorter than the floor above, and for a file whose
@@ -448,14 +470,38 @@ mod tests {
         for name in [
             "a.mp4", "a.mkv", "a.mov", "a.avi", "a.webm", "a.MP4", "a.MkV",
         ] {
-            assert!(is_video_file(Path::new(name)), "{name} should be a video");
-        }
-        for name in ["a.txt", "a.mp3", "a.mp4.part", "a", "a.", ".mp4"] {
-            assert!(
-                !is_video_file(Path::new(name)),
-                "{name} should not be a video"
+            assert_eq!(
+                media_kind(Path::new(name)),
+                Some(MediaKind::Video),
+                "{name} should be a video"
             );
         }
+        for name in ["a.txt", "a.mp3", "a.mp4.part", "a", "a.", ".mp4"] {
+            assert_eq!(
+                media_kind(Path::new(name)),
+                None,
+                "{name} should not be indexed"
+            );
+        }
+    }
+
+    #[test]
+    fn recognises_image_extensions_case_insensitively() {
+        for name in ["a.jpg", "a.jpeg", "a.png", "a.webp", "a.PNG", "a.JpEg"] {
+            assert_eq!(
+                media_kind(Path::new(name)),
+                Some(MediaKind::Image),
+                "{name} should be an image"
+            );
+        }
+    }
+
+    /// `webm` is a video and `webp` is an image; they differ by one character
+    /// and a library full of both is exactly where a sloppy match would show.
+    #[test]
+    fn does_not_confuse_webm_with_webp() {
+        assert_eq!(media_kind(Path::new("a.webm")), Some(MediaKind::Video));
+        assert_eq!(media_kind(Path::new("a.webp")), Some(MediaKind::Image));
     }
 
     // ── Scanning ────────────────────────────────────────────────────────────
@@ -517,6 +563,18 @@ mod tests {
     }
 
     impl TempDirs {
+        /// A real, decodable still image. Same contract as `real_video`:
+        /// returns false when ffmpeg is unavailable so the caller can skip.
+        fn real_image(&self, name: &str) -> bool {
+            let status = std::process::Command::new("ffmpeg")
+                .args([
+                    "-nostdin", "-v", "error", "-f", "lavfi", "-i",
+                    "testsrc=size=320x240:rate=1:duration=1", "-frames:v", "1", "-y",
+                ])
+                .arg(self.state.videos_dir.join(name))
+                .status();
+            matches!(status, Ok(s) if s.success())
+        }
     }
 
     impl Drop for TempDirs {
@@ -545,6 +603,78 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, ["clip.mp4", "show.mkv"]);
+    }
+
+    #[tokio::test]
+    async fn scan_indexes_images_alongside_videos() {
+        let t = TempDirs::new().await;
+        t.write("clip.mp4", 10);
+        t.write("logo.png", 10);
+        t.write("photo.webp", 10);
+        t.write("notes.txt", 5);
+
+        assert_eq!(scan_once(&t.state).await.unwrap().upserted, 3);
+
+        let mut found: Vec<_> = db::list_videos(&t.state.db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|v| (v.filename, v.kind))
+            .collect();
+        found.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            found,
+            [
+                ("clip.mp4".to_string(), MediaKind::Video),
+                ("logo.png".to_string(), MediaKind::Image),
+                ("photo.webp".to_string(), MediaKind::Image),
+            ]
+        );
+    }
+
+    /// ffprobe does not decline to report a duration for a still — a JPEG goes
+    /// through the image2 demuxer and reports "0.040000", one frame at 25fps,
+    /// which `parse_duration_secs` rounds to `Some(0)`. Left alone that renders
+    /// as a 0:00 runtime beside every photo in the library.
+    #[tokio::test]
+    async fn an_image_indexes_with_no_duration_rather_than_zero() {
+        if ffmpeg_missing() {
+            return;
+        }
+        let t = TempDirs::new().await;
+        if !t.real_image("poster.jpg") {
+            return;
+        }
+
+        scan_once(&t.state).await.unwrap();
+
+        let video = db::get_video_by_filename(&t.state.db, "poster.jpg")
+            .await
+            .unwrap()
+            .expect("image should be indexed");
+        assert_eq!(video.kind, MediaKind::Image);
+        assert_eq!(
+            video.duration_secs, None,
+            "a still must have no duration at all, not a rounded-down zero"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_image_gets_a_poster_from_its_own_first_frame() {
+        if ffmpeg_missing() {
+            return;
+        }
+        let t = TempDirs::new().await;
+        if !t.real_image("poster.png") {
+            return;
+        }
+
+        let summary = scan_once(&t.state).await.unwrap();
+        assert_eq!(summary.upserted, 1);
+        assert!(
+            thumbnail_path(&t.state, "poster.png").is_file(),
+            "an image should get a poster like any other library entry"
+        );
     }
 
     #[tokio::test]

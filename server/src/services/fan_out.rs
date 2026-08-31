@@ -201,6 +201,7 @@ mod tests {
         PlayCommand {
             url: "http://server:8000/videos/clip.mp4".to_string(),
             video_id: Uuid::new_v4(),
+            kind: shared::MediaKind::Video,
         }
     }
 

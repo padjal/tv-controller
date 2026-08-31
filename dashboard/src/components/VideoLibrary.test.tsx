@@ -16,6 +16,7 @@ function video(overrides: Partial<Video> & { filename: string }): Video {
   return {
     id: overrides.filename,
     duration_secs: 90,
+    kind: "Video",
     size_bytes: 1024 * 1024,
     ...overrides,
   };
@@ -78,6 +79,18 @@ describe("loading the library", () => {
 
     const row = await screen.findByRole("radio", { name: /clip\.mkv/ });
     expect(row.closest("label")).toHaveTextContent("—");
+  });
+
+  it("labels a still as an image instead of dashing its runtime", async () => {
+    // An em dash reads as "runtime unknown"; a photo has no runtime at all.
+    getVideos.mockResolvedValue([
+      video({ filename: "logo.png", kind: "Image", duration_secs: null }),
+    ]);
+    renderLibrary();
+
+    const row = await screen.findByRole("radio", { name: /logo\.png/ });
+    expect(row.closest("label")).toHaveTextContent("Image");
+    expect(row.closest("label")).not.toHaveTextContent("—");
   });
 });
 

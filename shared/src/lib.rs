@@ -28,6 +28,57 @@ pub enum DeviceState {
     Offline,
 }
 
+// ── Media kind ────────────────────────────────────────────────────────────────
+
+/// Extensions the library indexes, lower-case and without the leading dot.
+pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "avi", "webm"];
+pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
+
+/// What sort of file a library entry is.
+///
+/// Derived from the filename rather than stored in a column: `filename` is
+/// UNIQUE and never changes for a given row, so a stored kind could only ever
+/// drift out of step with the name it was derived from.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export, export_to = "../../dashboard/src/types/")]
+pub enum MediaKind {
+    // Default so that `PlayCommand::kind` can be `#[serde(default)]` — an agent
+    // that has not been redeployed yet sends no kind, and everything that
+    // existed before this field was added was a video.
+    #[default]
+    Video,
+    Image,
+}
+
+impl MediaKind {
+    /// `None` for anything the library does not index.
+    ///
+    /// Extension handling goes through `Path` rather than a plain rsplit so the
+    /// edge cases stay exactly as they were: `.mp4` is a dotfile with no
+    /// extension, and `clip.mp4.part` (a half-finished copy) has extension
+    /// `part`. Neither is indexed.
+    ///
+    /// Note that `webm` (video) and `webp` (image) differ by one character.
+    pub fn from_filename(name: &str) -> Option<Self> {
+        let ext = std::path::Path::new(name)
+            .extension()
+            .and_then(|e| e.to_str())?
+            .to_ascii_lowercase();
+
+        if VIDEO_EXTENSIONS.contains(&ext.as_str()) {
+            Some(Self::Video)
+        } else if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+            Some(Self::Image)
+        } else {
+            None
+        }
+    }
+
+    pub fn is_image(self) -> bool {
+        matches!(self, Self::Image)
+    }
+}
+
 // ── Video ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -35,7 +86,10 @@ pub enum DeviceState {
 pub struct Video {
     pub id: Uuid,
     pub filename: String,
+    // Always None for an image: ffprobe reports a bogus one-frame duration
+    // ("0.040000") for a JPEG, which would render as 0:00 in the library.
     pub duration_secs: Option<u32>,
+    pub kind: MediaKind,
     // Same as Device::last_seen: a JSON number on the wire, not a bigint.
     #[ts(type = "number")]
     pub size_bytes: u64,
@@ -48,6 +102,11 @@ pub struct Video {
 pub struct PlayCommand {
     pub url: String,
     pub video_id: Uuid,
+    // `serde(default)` throughout: the agent deserializes this struct with no
+    // tolerance for missing fields, so a required addition here would make an
+    // agent that has not been redeployed reject playback outright.
+    #[serde(default)]
+    pub kind: MediaKind,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]

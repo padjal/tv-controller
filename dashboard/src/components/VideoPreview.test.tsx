@@ -7,6 +7,7 @@ function video(overrides: Partial<Video> & { filename: string }): Video {
   return {
     id: overrides.filename,
     duration_secs: 30,
+    kind: "Video",
     size_bytes: 1024 * 1024,
     ...overrides,
   };
@@ -47,6 +48,27 @@ describe("VideoPreview", () => {
     const player = screen.getByLabelText("Preview of promo.mp4");
     expect(player).toHaveAttribute("preload", "metadata");
     expect(player).not.toHaveAttribute("autoplay");
+  });
+
+  it("shows a still as an image rather than an empty video player", () => {
+    // A <video> pointed at a PNG renders a permanently blank frame with
+    // useless transport controls.
+    render(<VideoPreview video={video({ filename: "logo.png", kind: "Image", duration_secs: null })} />);
+
+    const preview = screen.getByAltText("Preview of logo.png");
+    expect(preview.tagName).toBe("IMG");
+    expect(preview).toHaveAttribute("src", "/videos/logo.png");
+  });
+
+  it("swaps element type when moving between an image and a video", () => {
+    const { rerender } = render(
+      <VideoPreview video={video({ filename: "logo.png", kind: "Image", duration_secs: null })} />,
+    );
+    expect(screen.getByAltText("Preview of logo.png").tagName).toBe("IMG");
+
+    rerender(<VideoPreview video={video({ filename: "promo.mp4" })} />);
+    expect(screen.getByLabelText("Preview of promo.mp4").tagName).toBe("VIDEO");
+    expect(screen.queryByAltText("Preview of logo.png")).not.toBeInTheDocument();
   });
 
   it("rebuilds the player when the selection changes", () => {
