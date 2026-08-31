@@ -109,6 +109,17 @@ pub struct PlayCommand {
     // agent that has not been redeployed reject playback outright.
     #[serde(default)]
     pub kind: MediaKind,
+    /// Unix time in milliseconds at which every targeted TV should begin, and
+    /// the epoch the looping timeline is measured from.
+    ///
+    /// `None` means start immediately — used when only one device is targeted,
+    /// where there is nothing to synchronise against and a lead time would
+    /// just be a delay.
+    ///
+    /// A JSON number, not a bigint: see `Device::last_seen`.
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub start_at_unix_ms: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]

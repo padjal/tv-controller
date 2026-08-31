@@ -29,6 +29,7 @@ or the Pi itself.
 | `server/videos.sh [SERVER_HOST]` | List → metadata → download → Range → 416 → 404 |
 | `server/playback.sh [SERVER_HOST]` | play → pause → resume → stop → play-all, plus the 400/404/502 paths |
 | `server/events.sh [SERVER_HOST]` | Tail the SSE stream, one line per event |
+| `server/sync.sh [SERVER_HOST]` | Measure how far apart the TVs' playheads are |
 
 `videos.sh` needs at least one file in the server's `VIDEOS_DIR`; it skips the
 file tests if the library is empty.
@@ -36,6 +37,14 @@ file tests if the library is empty.
 `playback.sh` needs a registered device that actually answers. A real Pi is
 ideal, but anything serving `POST /play`, `/pause`, `/resume` and `/stop` on
 port 8080 will do — the server does not care what is behind them.
+
+`sync.sh` needs at least two online devices playing the same video, and asks
+each agent directly where its playhead is — the server only polls every 10s,
+which would blur exactly what is being measured. Run it twice: once right after
+a multi-TV play, to check the scheduled start worked, and again after an hour
+of looping, to check drift correction is holding. The second run is the one
+that catches a regression, because each Pi loops on its own crystal and a fleet
+that starts together still wanders apart without correction.
 
 `events.sh` blocks by design. Run it in one terminal and drive the server from
 another; every device change, playback command and library scan should show up
@@ -48,6 +57,7 @@ in it.
 | `PI_HOST` | `192.168.1.11` |
 | `VIDEO_PATH` | `/tmp/test.mp4` |
 | `SERVER_HOST` | `127.0.0.1` (port 8000) |
+| `TOLERANCE` | `0.15` seconds (`sync.sh`) |
 
 Override with an environment variable or a positional argument:
 

@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -72,8 +72,8 @@ pub async fn play(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PlaybackRequest>,
 ) -> Result<PlaybackResponse, ApiError> {
-    let (video, command) = load_play_command(&state, req.video_id).await?;
     let devices = resolve_devices(&state, &req.device_ids).await?;
+    let (video, command) = load_play_command(&state, req.video_id, devices.found.len()).await?;
 
     let results = fan_out::fan_out_play(&devices.found, &command, &state.http).await;
     Ok(record(
@@ -91,8 +91,6 @@ pub async fn play_all(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PlayAllRequest>,
 ) -> Result<PlaybackResponse, ApiError> {
-    let (video, command) = load_play_command(&state, req.video_id).await?;
-
     let found: Vec<Device> = db::list_devices(&state.db)
         .await?
         .into_iter()
@@ -108,6 +106,7 @@ pub async fn play_all(
         found,
         missing: Vec::new(),
     };
+    let (video, command) = load_play_command(&state, req.video_id, devices.found.len()).await?;
     let results = fan_out::fan_out_play(&devices.found, &command, &state.http).await;
     Ok(record(
         &state,
@@ -176,10 +175,24 @@ struct Targets {
     missing: Vec<Uuid>,
 }
 
+/// How far ahead a synchronised start is scheduled.
+///
+/// The fan-out is already concurrent, so this is not about the requests: it is
+/// the headroom each agent needs to load the file and buffer the first frame
+/// from the server before the agreed instant. Too short and the slowest TV
+/// misses it (and is pulled into line by the first drift check instead); too
+/// long and every play feels sluggish.
+const START_LEAD: Duration = Duration::from_millis(1500);
+
 /// Look up the video and build the command the agents receive.
+///
+/// `targets` is how many TVs will receive it. One device gets no scheduled
+/// start at all — there is nothing to synchronise against, and a lead time
+/// would be a delay the operator can feel for no benefit.
 async fn load_play_command(
     state: &AppState,
     video_id: Uuid,
+    targets: usize,
 ) -> Result<(shared::Video, PlayCommand), ApiError> {
     let video = db::get_video(&state.db, video_id)
         .await?
@@ -189,6 +202,7 @@ async fn load_play_command(
         url: state.video_url(&video.filename),
         video_id: video.id,
         kind: video.kind,
+        start_at_unix_ms: (targets > 1).then(|| current_unix_ms() + START_LEAD.as_millis() as i64),
     };
     Ok((video, command))
 }
@@ -290,6 +304,16 @@ async fn record(
     Ok(response)
 }
 
+/// Wall-clock milliseconds. The synchronised start is an agreement about this
+/// value, so every Pi has to agree about it too — see the NTP requirement in
+/// `scripts/setup_pi.sh`.
+fn current_unix_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 fn current_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -316,6 +340,9 @@ mod tests {
     #[derive(Default)]
     struct AgentLog {
         calls: Mutex<Vec<(String, String)>>, // (endpoint, host)
+        /// Bodies of the /play requests, so tests can inspect the command
+        /// itself rather than only that one was sent.
+        play_bodies: Mutex<Vec<serde_json::Value>>,
         plays: AtomicUsize,
     }
 
@@ -423,7 +450,7 @@ mod tests {
             String,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>>
                + Clone {
-            move |headers: axum::http::HeaderMap, _body: String| {
+            move |headers: axum::http::HeaderMap, body: String| {
                 let log = log.clone();
                 Box::pin(async move {
                     let host = headers
@@ -437,6 +464,9 @@ mod tests {
                         .push((endpoint.to_string(), host.clone()));
                     if endpoint == "play" {
                         log.plays.fetch_add(1, Ordering::SeqCst);
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+                            log.play_bodies.lock().unwrap().push(parsed);
+                        }
                     }
                     if host.starts_with(FAILING_IP) {
                         (StatusCode::INTERNAL_SERVER_ERROR, "mpv socket closed").into_response()
@@ -797,4 +827,111 @@ mod tests {
             .await;
         assert_eq!(resp.status(), 404);
     }
+    // ── Synchronised start ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn playing_on_several_tvs_schedules_one_shared_start() {
+        let h = Harness::new().await;
+        let a = h.add_device("TV-01", "10.0.0.1").await;
+        let b = h.add_device("TV-02", "10.0.0.2").await;
+        let c = h.add_device("TV-03", "10.0.0.3").await;
+        let video = h.add_video("clip.mp4").await;
+
+        let before = current_unix_ms();
+        let resp = h
+            .post(
+                "/playback/play",
+                serde_json::json!({ "device_ids": [a, b, c], "video_id": video }),
+            )
+            .await;
+        assert_eq!(resp.status(), 200);
+        let after = current_unix_ms();
+
+        let bodies = h.agent.play_bodies.lock().unwrap().clone();
+        assert_eq!(bodies.len(), 3);
+
+        let starts: Vec<i64> = bodies
+            .iter()
+            .map(|b| b["start_at_unix_ms"].as_i64().expect("a scheduled start"))
+            .collect();
+
+        // One instant for the whole group — that is the entire point. Three
+        // slightly different times would reproduce the stagger being fixed.
+        assert!(
+            starts.windows(2).all(|w| w[0] == w[1]),
+            "every TV must be given the same instant, got {starts:?}"
+        );
+
+        // And it has to be far enough ahead for the slowest to have buffered,
+        // but not so far the operator notices.
+        let start = starts[0];
+        assert!(
+            start >= before + START_LEAD.as_millis() as i64
+                && start <= after + START_LEAD.as_millis() as i64,
+            "start {start} is not one lead time ahead of [{before}, {after}]"
+        );
+    }
+
+    /// With one TV there is nothing to synchronise against, and a lead time
+    /// would just be a delay the operator can feel.
+    #[tokio::test]
+    async fn playing_on_a_single_tv_starts_immediately() {
+        let h = Harness::new().await;
+        let a = h.add_device("TV-01", "10.0.0.1").await;
+        let video = h.add_video("clip.mp4").await;
+
+        h.post(
+            "/playback/play",
+            serde_json::json!({ "device_ids": [a], "video_id": video }),
+        )
+        .await;
+
+        let bodies = h.agent.play_bodies.lock().unwrap().clone();
+        assert_eq!(bodies.len(), 1);
+        assert!(
+            bodies[0]["start_at_unix_ms"].is_null(),
+            "a single TV should not wait: {:?}",
+            bodies[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn play_all_schedules_a_shared_start_too() {
+        let h = Harness::new().await;
+        h.add_device("TV-01", "10.0.0.1").await;
+        h.add_device("TV-02", "10.0.0.2").await;
+        let video = h.add_video("clip.mp4").await;
+
+        let resp = h
+            .post("/playback/play-all", serde_json::json!({ "video_id": video }))
+            .await;
+        assert_eq!(resp.status(), 200);
+
+        let bodies = h.agent.play_bodies.lock().unwrap().clone();
+        let starts: Vec<i64> = bodies
+            .iter()
+            .map(|b| b["start_at_unix_ms"].as_i64().expect("a scheduled start"))
+            .collect();
+        assert_eq!(starts.len(), 2);
+        assert_eq!(starts[0], starts[1]);
+    }
+
+    /// The kind travels with the command so the agent knows whether to loop
+    /// the file or hold it as a still.
+    #[tokio::test]
+    async fn the_play_command_carries_the_media_kind() {
+        let h = Harness::new().await;
+        let a = h.add_device("TV-01", "10.0.0.1").await;
+        let image = h.add_video("logo.png").await;
+
+        h.post(
+            "/playback/play",
+            serde_json::json!({ "device_ids": [a], "video_id": image }),
+        )
+        .await;
+
+        let bodies = h.agent.play_bodies.lock().unwrap().clone();
+        assert_eq!(bodies[0]["kind"], "Image");
+    }
+
 }

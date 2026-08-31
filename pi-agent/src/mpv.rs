@@ -27,6 +27,60 @@ static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 /// talking.
 const IPC_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// How soon after a synchronised start the first drift check runs.
+///
+/// Short on purpose. It is what rescues a Pi that buffered slowly and missed
+/// the agreed instant: without it that TV stays visibly behind for a whole
+/// [`RESYNC_INTERVAL`], which is exactly the stagger this feature exists to
+/// remove.
+const RESYNC_FIRST: Duration = Duration::from_secs(3);
+
+/// How often playback is checked against the shared timeline afterwards.
+///
+/// Each TV loops on its own crystal, so even a perfect start decays over a
+/// long unattended run. This is the correction for that, and it is deliberately
+/// infrequent — the drift being corrected accumulates over minutes.
+const RESYNC_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Drift below this is left alone. Well under a frame at 25fps, and chasing it
+/// would mean permanently nudging the speed back and forth.
+const DRIFT_DEADBAND: f64 = 0.05;
+
+/// Drift at or above this is corrected by seeking rather than by speed.
+///
+/// A seek re-buffers an HTTP stream and is visible; the speed nudge is not.
+/// But a nudge closes a gap slowly, so a large one has to be cut.
+const DRIFT_SEEK_THRESHOLD: f64 = 1.0;
+
+/// How much the playback rate is trimmed to absorb small drift. 2% is inaudible
+/// (mpv corrects pitch by default) and invisible.
+const DRIFT_NUDGE: f64 = 0.02;
+
+/// Wall-clock milliseconds — the clock the whole fleet agrees on.
+fn now_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// How far `position` is ahead of `canonical`, taking the shorter way round a
+/// loop of length `duration`.
+///
+/// Both are points on a circle: a file that has just wrapped sits near 0 while
+/// the timeline still says near `duration`, which read naively is a whole
+/// duration of drift and would trigger a pointless seek on every loop. The
+/// result is signed — positive means ahead — and never exceeds half a loop.
+fn shortest_drift(position: f64, canonical: f64, duration: f64) -> f64 {
+    let mut drift = position - canonical;
+    if drift > duration / 2.0 {
+        drift -= duration;
+    } else if drift < -duration / 2.0 {
+        drift += duration;
+    }
+    drift
+}
+
 pub struct MpvClient {
     #[cfg_attr(not(unix), allow(dead_code))]
     socket_path: PathBuf,
@@ -53,6 +107,15 @@ pub struct MpvClient {
     rotation: Mutex<u16>,
     /// URL of the image to display when nothing is playing, if any.
     idle_background: Mutex<Option<String>>,
+    /// Bumped by anything that changes what is on screen.
+    ///
+    /// A synchronised start waits before releasing the pause, and a drift
+    /// correction loop runs for as long as that playback lasts. Both capture
+    /// the value at the moment they were created and stop as soon as it moves,
+    /// so a second play cannot have its pause cleared by the task belonging to
+    /// the first — which would unpause the *new* file at the old file's
+    /// moment, or seek it to a position on the wrong timeline.
+    generation: AtomicU64,
     /// Whether that image is what is currently on screen.
     ///
     /// mpv cannot tell us this: showing the idle background means a file *is*
@@ -68,6 +131,7 @@ impl MpvClient {
             ipc_timeout: IPC_TIMEOUT,
             current_video_id: Mutex::new(None),
             rotation: Mutex::new(0),
+            generation: AtomicU64::new(0),
             idle_background: Mutex::new(None),
             showing_idle_background: Mutex::new(false),
         }
@@ -82,6 +146,7 @@ impl MpvClient {
             ipc_timeout,
             current_video_id: Mutex::new(None),
             rotation: Mutex::new(0),
+            generation: AtomicU64::new(0),
             idle_background: Mutex::new(None),
             showing_idle_background: Mutex::new(false),
         }
@@ -233,17 +298,58 @@ impl MpvClient {
     /// After rather than before, because setting it while the previous file is
     /// still loaded resumes *that* file for the moment before `loadfile`
     /// replaces it, flashing the old content onto the screen.
-    pub async fn play(&self, url: &str, video_id: Uuid, kind: MediaKind) -> Result<()> {
+    pub async fn play(
+        self: &std::sync::Arc<Self>,
+        url: &str,
+        video_id: Uuid,
+        kind: MediaKind,
+        start_at_unix_ms: Option<i64>,
+    ) -> Result<()> {
         // Re-applied on every play rather than only when it is set. mpv keeps
         // `video-rotate` across files but not across processes, and
         // `ensure_running` respawns mpv after a crash — this is what makes a
         // recovered TV come back the right way up.
         self.apply_rotation().await?;
         self.set_loop_mode(kind).await?;
+
+        // Supersede any start or drift correction still pending from the last
+        // play before touching what is on screen.
+        let generation = self.next_generation();
+
+        // Speed is global and outlives the file, like pause and loop-file. A
+        // previous correction could otherwise leave this file running at 1.02.
+        self.set_speed(1.0).await?;
+
+        // Load paused so that every TV can be released at the same instant
+        // rather than whenever each finished buffering. Pausing before the
+        // load is safe: the hazard the ordering below guards against is
+        // *resuming* the outgoing file, which pausing cannot do.
+        if start_at_unix_ms.is_some() {
+            self.send_command(serde_json::json!({"command": ["set_property", "pause", true]}))
+                .await?;
+        }
+
         self.send_command(serde_json::json!({"command": ["loadfile", url, "replace"]}))
             .await?;
-        self.send_command(serde_json::json!({"command": ["set_property", "pause", false]}))
-            .await?;
+
+        match start_at_unix_ms {
+            None => {
+                self.send_command(
+                    serde_json::json!({"command": ["set_property", "pause", false]}),
+                )
+                .await?;
+            }
+            Some(start_at) => {
+                // Released by a background task so the handler can answer now:
+                // the server gives a play five seconds, and the lead time
+                // alone would eat most of that.
+                let client = std::sync::Arc::clone(self);
+                tokio::spawn(async move {
+                    client.run_synchronised(generation, start_at, kind).await;
+                });
+            }
+        }
+
         // Recorded only once the commands above succeeded — claiming a video
         // we failed to load would put a title on the dashboard for a TV that
         // is showing nothing.
@@ -252,12 +358,124 @@ impl MpvClient {
         Ok(())
     }
 
+    /// Hold the loaded file until `start_at`, then keep it on the shared
+    /// timeline for as long as this playback lasts.
+    async fn run_synchronised(&self, generation: u64, start_at: i64, kind: MediaKind) {
+        let wait = start_at.saturating_sub(now_unix_ms());
+        if wait > 0 {
+            tokio::time::sleep(Duration::from_millis(wait as u64)).await;
+        }
+        if self.generation() != generation {
+            return;
+        }
+
+        // Late arrival: the agreed moment has already passed, so start from
+        // where the others are rather than from the beginning.
+        if let Err(err) = self.correct_drift(start_at, kind).await {
+            tracing::debug!("could not align before start: {err:#}");
+        }
+
+        if let Err(err) = self
+            .send_command(serde_json::json!({"command": ["set_property", "pause", false]}))
+            .await
+        {
+            tracing::warn!("synchronised start failed to unpause: {err:#}");
+            return;
+        }
+
+        // A still has no timeline to drift along.
+        if kind.is_image() {
+            return;
+        }
+
+        let mut delay = RESYNC_FIRST;
+        loop {
+            tokio::time::sleep(delay).await;
+            delay = RESYNC_INTERVAL;
+            if self.generation() != generation {
+                return;
+            }
+            if let Err(err) = self.correct_drift(start_at, kind).await {
+                tracing::debug!("drift check failed: {err:#}");
+            }
+        }
+    }
+
+    /// Pull playback back towards where the shared timeline says it should be.
+    ///
+    /// The canonical position is `((now - epoch) / 1000) mod duration`: every
+    /// TV given the same epoch computes the same answer, so they converge on
+    /// each other without talking to one another — and a TV that joins late,
+    /// or was restarted, lands in the right place rather than at zero.
+    async fn correct_drift(&self, epoch_ms: i64, kind: MediaKind) -> Result<()> {
+        if kind.is_image() {
+            return Ok(());
+        }
+
+        let duration = self
+            .get_property("duration")
+            .await?
+            .as_f64()
+            .filter(|d| d.is_finite() && *d > 0.0)
+            .ok_or_else(|| anyhow!("mpv reported no duration"))?;
+        let position = self
+            .get_property("time-pos")
+            .await?
+            .as_f64()
+            .ok_or_else(|| anyhow!("mpv reported no position"))?;
+
+        let elapsed = (now_unix_ms() - epoch_ms) as f64 / 1000.0;
+        if elapsed < 0.0 {
+            return Ok(());
+        }
+        let canonical = elapsed % duration;
+
+        let drift = shortest_drift(position, canonical, duration);
+
+        if drift.abs() < DRIFT_DEADBAND {
+            self.set_speed(1.0).await?;
+        } else if drift.abs() >= DRIFT_SEEK_THRESHOLD {
+            // Too far to nudge out. Visible, but so is the gap.
+            self.set_speed(1.0).await?;
+            self.send_command(serde_json::json!({
+                "command": ["seek", canonical, "absolute"]
+            }))
+            .await?;
+            tracing::info!(drift, canonical, "seeked to correct playback drift");
+        } else {
+            // Ahead runs slow, behind runs fast, until the next check finds it
+            // inside the deadband and restores 1.0.
+            let speed = if drift > 0.0 { 1.0 - DRIFT_NUDGE } else { 1.0 + DRIFT_NUDGE };
+            self.set_speed(speed).await?;
+            tracing::debug!(drift, speed, "nudging playback rate to correct drift");
+        }
+
+        Ok(())
+    }
+
+    async fn set_speed(&self, speed: f64) -> Result<()> {
+        self.send_command(serde_json::json!({"command": ["set_property", "speed", speed]}))
+            .await?;
+        Ok(())
+    }
+
+    fn next_generation(&self) -> u64 {
+        self.generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
     /// Stop playback, falling back to the idle background if one is set.
     ///
     /// A bare `stop` leaves mpv idle on a black screen. Where the client has
     /// chosen artwork, a stopped TV should show that instead — a wall of black
     /// rectangles during business hours looks like a fleet of broken screens.
     pub async fn stop(&self) -> Result<()> {
+        // Cancels a scheduled start that has not fired yet, and any drift
+        // correction still running for the file being stopped.
+        self.next_generation();
         self.send_command(serde_json::json!({"command": ["stop"]})).await?;
         // pause/resume deliberately leave this alone — only stop and playing
         // something else change what is on screen.
@@ -501,7 +719,7 @@ mod tests {
                 .unwrap();
         });
 
-        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        let client = std::sync::Arc::new(MpvClient::with_ipc_timeout(&path, Duration::from_secs(5)));
         let data = client
             .send_command(serde_json::json!({"command": ["get_version"]}))
             .await
@@ -578,7 +796,7 @@ mod tests {
             serde_json::json!({"idle-active": false, "pause": false, "time-pos": 3.0, "duration": 9.0}),
         );
 
-        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        let client = std::sync::Arc::new(MpvClient::with_ipc_timeout(&path, Duration::from_secs(5)));
         client
             .set_idle_background(Some("http://server:8000/videos/logo.png".into()))
             .await
@@ -602,7 +820,7 @@ mod tests {
         let path = socket_path("stopbg");
         let seen = fake_mpv(path.clone(), serde_json::json!({}));
 
-        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        let client = std::sync::Arc::new(MpvClient::with_ipc_timeout(&path, Duration::from_secs(5)));
         client
             .set_idle_background(Some("http://server:8000/videos/logo.png".into()))
             .await
@@ -627,7 +845,7 @@ mod tests {
         let path = socket_path("stopplain");
         let seen = fake_mpv(path.clone(), serde_json::json!({}));
 
-        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        let client = std::sync::Arc::new(MpvClient::with_ipc_timeout(&path, Duration::from_secs(5)));
         client.stop().await.unwrap();
 
         assert_eq!(
@@ -645,7 +863,7 @@ mod tests {
             serde_json::json!({"idle-active": false, "pause": false, "time-pos": 2.0, "duration": 30.0}),
         );
 
-        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        let client = std::sync::Arc::new(MpvClient::with_ipc_timeout(&path, Duration::from_secs(5)));
         client
             .set_idle_background(Some("http://server:8000/videos/logo.png".into()))
             .await
@@ -655,6 +873,7 @@ mod tests {
                 "http://server:8000/videos/promo.mp4",
                 Uuid::new_v4(),
                 MediaKind::Video,
+                None,
             )
             .await
             .unwrap();
@@ -668,12 +887,233 @@ mod tests {
         assert_eq!(status.position_secs, Some(2.0));
     }
 
+    #[test]
+    fn drift_is_measured_the_shorter_way_round_a_loop() {
+        // Straightforward cases: ahead is positive, behind is negative.
+        assert!((shortest_drift(12.0, 10.0, 30.0) - 2.0).abs() < 1e-9);
+        assert!((shortest_drift(8.0, 10.0, 30.0) + 2.0).abs() < 1e-9);
+
+        // Just wrapped: 0.5s into the file while the timeline says 29.5s is
+        // one second ahead, not 29 seconds behind. Read naively this would
+        // seek on every single loop.
+        assert!((shortest_drift(0.5, 29.5, 30.0) - 1.0).abs() < 1e-9);
+
+        // And the mirror image: about to wrap, timeline already has.
+        assert!((shortest_drift(29.5, 0.5, 30.0) + 1.0).abs() < 1e-9);
+
+        // Never reports more than half a loop in either direction.
+        for (pos, canon) in [(0.0, 15.0), (15.0, 0.0), (29.9, 0.1), (0.1, 29.9)] {
+            assert!(shortest_drift(pos, canon, 30.0).abs() <= 15.0 + 1e-9);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_scheduled_play_loads_paused_and_does_not_start_early() {
+        let path = socket_path("sched");
+        let seen = fake_mpv(path.clone(), serde_json::json!({}));
+
+        let client = std::sync::Arc::new(MpvClient::with_ipc_timeout(&path, Duration::from_secs(5)));
+        // Far enough out that the release cannot have happened yet.
+        let start_at = now_unix_ms() + 10_000;
+        client
+            .play(
+                "http://server:8000/videos/promo.mp4",
+                Uuid::new_v4(),
+                MediaKind::Video,
+                Some(start_at),
+            )
+            .await
+            .unwrap();
+
+        let commands = seen.lock().unwrap().clone();
+        assert!(
+            commands.contains(&serde_json::json!(["set_property", "pause", true])),
+            "a synchronised play must load paused so every TV can be released together: {commands:?}"
+        );
+        assert!(
+            !commands.contains(&serde_json::json!(["set_property", "pause", false])),
+            "nothing may be unpaused before the agreed instant: {commands:?}"
+        );
+
+        // The pause must come before the load: releasing it is what starts the
+        // file, so a load that is not already paused has already begun.
+        let pause_at = commands
+            .iter()
+            .position(|c| c == &serde_json::json!(["set_property", "pause", true]))
+            .unwrap();
+        let load_at = commands
+            .iter()
+            .position(|c| c[0] == serde_json::json!("loadfile"))
+            .unwrap();
+        assert!(pause_at < load_at, "must be paused before loading: {commands:?}");
+    }
+
+    #[tokio::test]
+    async fn a_scheduled_play_releases_at_the_agreed_moment() {
+        let path = socket_path("release");
+        // No duration, so the drift check gives up and only the release shows.
+        let seen = fake_mpv(path.clone(), serde_json::json!({}));
+
+        let client = std::sync::Arc::new(MpvClient::with_ipc_timeout(&path, Duration::from_secs(5)));
+        client
+            .play(
+                "http://server:8000/videos/promo.mp4",
+                Uuid::new_v4(),
+                MediaKind::Video,
+                Some(now_unix_ms() + 150),
+            )
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let commands = seen.lock().unwrap().clone();
+        assert!(
+            commands.contains(&serde_json::json!(["set_property", "pause", false])),
+            "the scheduled start should have fired by now: {commands:?}"
+        );
+    }
+
+    /// A superseded start must not fire. Otherwise the task belonging to the
+    /// first play unpauses the *second* file at the first one's moment.
+    #[tokio::test]
+    async fn a_second_play_cancels_the_first_scheduled_start() {
+        let path = socket_path("supersede");
+        let seen = fake_mpv(path.clone(), serde_json::json!({}));
+
+        let client = std::sync::Arc::new(MpvClient::with_ipc_timeout(&path, Duration::from_secs(5)));
+        client
+            .play(
+                "http://server:8000/videos/first.mp4",
+                Uuid::new_v4(),
+                MediaKind::Video,
+                Some(now_unix_ms() + 200),
+            )
+            .await
+            .unwrap();
+
+        // Replaced immediately by an unscheduled play, which starts at once.
+        client
+            .play(
+                "http://server:8000/videos/second.mp4",
+                Uuid::new_v4(),
+                MediaKind::Video,
+                None,
+            )
+            .await
+            .unwrap();
+
+        seen.lock().unwrap().clear();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "the cancelled start still issued commands: {:?}",
+            seen.lock().unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_cancels_a_pending_scheduled_start() {
+        let path = socket_path("stopsched");
+        let seen = fake_mpv(path.clone(), serde_json::json!({}));
+
+        let client = std::sync::Arc::new(MpvClient::with_ipc_timeout(&path, Duration::from_secs(5)));
+        client
+            .play(
+                "http://server:8000/videos/promo.mp4",
+                Uuid::new_v4(),
+                MediaKind::Video,
+                Some(now_unix_ms() + 200),
+            )
+            .await
+            .unwrap();
+        client.stop().await.unwrap();
+
+        seen.lock().unwrap().clear();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // A start firing after a stop would put the TV back on a video the
+        // operator had just turned off.
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "a stopped TV was restarted by a pending schedule: {:?}",
+            seen.lock().unwrap()
+        );
+    }
+
+    /// A TV that missed the agreed instant joins where the others already are,
+    /// rather than starting from zero and staying a fixed gap behind forever.
+    #[tokio::test]
+    async fn a_late_start_seeks_onto_the_shared_timeline() {
+        let path = socket_path("late");
+        let seen = fake_mpv(
+            path.clone(),
+            serde_json::json!({"duration": 30.0, "time-pos": 0.0}),
+        );
+
+        let client = std::sync::Arc::new(MpvClient::with_ipc_timeout(&path, Duration::from_secs(5)));
+        // The epoch is already 10s in the past.
+        client
+            .play(
+                "http://server:8000/videos/promo.mp4",
+                Uuid::new_v4(),
+                MediaKind::Video,
+                Some(now_unix_ms() - 10_000),
+            )
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        let commands = seen.lock().unwrap().clone();
+        let seek = commands.iter().find(|c| c[0] == serde_json::json!("seek"));
+        let seek = seek.unwrap_or_else(|| panic!("expected a corrective seek: {commands:?}"));
+
+        let target = seek[1].as_f64().unwrap();
+        assert!(
+            (target - 10.0).abs() < 1.0,
+            "should seek to roughly 10s into a 30s loop, got {target}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_image_is_scheduled_but_never_drift_corrected() {
+        let path = socket_path("imgsync");
+        let seen = fake_mpv(
+            path.clone(),
+            serde_json::json!({"duration": 30.0, "time-pos": 0.0}),
+        );
+
+        let client = std::sync::Arc::new(MpvClient::with_ipc_timeout(&path, Duration::from_secs(5)));
+        client
+            .play(
+                "http://server:8000/videos/logo.png",
+                Uuid::new_v4(),
+                MediaKind::Image,
+                Some(now_unix_ms() - 10_000),
+            )
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        let commands = seen.lock().unwrap().clone();
+        assert!(
+            commands.contains(&serde_json::json!(["set_property", "pause", false])),
+            "the image should still be released: {commands:?}"
+        );
+        // A still has no timeline; seeking one is meaningless and mpv's
+        // reported duration for it cannot be trusted.
+        assert!(
+            !commands.iter().any(|c| c[0] == serde_json::json!("seek")),
+            "an image must never be seeked: {commands:?}"
+        );
+    }
+
     #[tokio::test]
     async fn rotation_is_reapplied_on_every_play() {
         let path = socket_path("rotplay");
         let seen = fake_mpv(path.clone(), serde_json::json!({}));
 
-        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        let client = std::sync::Arc::new(MpvClient::with_ipc_timeout(&path, Duration::from_secs(5)));
         client.set_rotation(90).await.unwrap();
         seen.lock().unwrap().clear();
 
@@ -682,6 +1122,7 @@ mod tests {
                 "http://server:8000/videos/promo.mp4",
                 Uuid::new_v4(),
                 MediaKind::Video,
+                None,
             )
             .await
             .unwrap();
@@ -700,12 +1141,13 @@ mod tests {
         let path = socket_path("image");
         let seen = fake_mpv(path.clone(), serde_json::json!({}));
 
-        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        let client = std::sync::Arc::new(MpvClient::with_ipc_timeout(&path, Duration::from_secs(5)));
         client
             .play(
                 "http://server:8000/videos/logo.png",
                 Uuid::new_v4(),
                 MediaKind::Image,
+                None,
             )
             .await
             .unwrap();
@@ -717,6 +1159,7 @@ mod tests {
                 serde_json::json!(["set_property", "video-rotate", 0]),
                 serde_json::json!(["set_property", "loop-file", "no"]),
                 serde_json::json!(["set_property", "image-display-duration", "inf"]),
+                serde_json::json!(["set_property", "speed", 1.0]),
                 serde_json::json!(["loadfile", "http://server:8000/videos/logo.png", "replace"]),
                 serde_json::json!(["set_property", "pause", false]),
             ],
@@ -730,12 +1173,13 @@ mod tests {
         let path = socket_path("loop");
         let seen = fake_mpv(path.clone(), serde_json::json!({}));
 
-        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        let client = std::sync::Arc::new(MpvClient::with_ipc_timeout(&path, Duration::from_secs(5)));
         client
             .play(
                 "http://server:8000/videos/promo.mp4",
                 Uuid::new_v4(),
                 MediaKind::Video,
+                None,
             )
             .await
             .unwrap();
@@ -747,6 +1191,7 @@ mod tests {
                 serde_json::json!(["set_property", "video-rotate", 0]),
                 serde_json::json!(["set_property", "loop-file", "inf"]),
                 serde_json::json!(["set_property", "image-display-duration", 1.0]),
+                serde_json::json!(["set_property", "speed", 1.0]),
                 serde_json::json!(["loadfile", "http://server:8000/videos/promo.mp4", "replace"]),
                 serde_json::json!(["set_property", "pause", false]),
             ],
@@ -765,11 +1210,16 @@ mod tests {
             path.clone(),
             serde_json::json!({"idle-active": false, "pause": false}),
         );
-        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        let client = std::sync::Arc::new(MpvClient::with_ipc_timeout(&path, Duration::from_secs(5)));
         let video_id = Uuid::new_v4();
 
         client
-            .play("http://server:8000/videos/promo.mp4", video_id, MediaKind::Video)
+            .play(
+                "http://server:8000/videos/promo.mp4",
+                video_id,
+                MediaKind::Video,
+                None,
+            )
             .await
             .unwrap();
         let status = client.get_status().await.unwrap();
@@ -795,13 +1245,14 @@ mod tests {
         // mpv reports nothing loaded — stopped on the Pi, or crashed and
         // respawned. Our remembered id is stale and must not be reported.
         let _seen = fake_mpv(path.clone(), serde_json::json!({"idle-active": true}));
-        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        let client = std::sync::Arc::new(MpvClient::with_ipc_timeout(&path, Duration::from_secs(5)));
 
         client
             .play(
                 "http://server:8000/videos/promo.mp4",
                 Uuid::new_v4(),
                 MediaKind::Video,
+                None,
             )
             .await
             .unwrap();

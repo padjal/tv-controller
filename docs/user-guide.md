@@ -109,7 +109,31 @@ that TV is actually doing.
 ## Things worth knowing
 
 **Pause and resume keep the video; stop forgets it.** After a stop, the tile
-shows `—` and you need to pick a video again to start it.
+shows `—` and you need to pick a video again to start it. If an idle background
+is set, a stopped TV shows that image rather than a black screen — the tile
+still reads `Idle`, because nothing is playing.
+
+**Images work like videos.** Drop a JPEG, PNG or WebP into the videos directory
+and it appears in the library with `Image` where a runtime would be. Playing
+one holds it on screen until you play something else or stop — the same way a
+video loops.
+
+**Playing to several TVs starts them together.** They are given one shared
+instant a second or so ahead and all start at it, instead of starting whenever
+each has finished buffering. They also correct themselves as they loop, so they
+stay together over a long unattended run. A single TV starts immediately —
+there is nothing to line it up with.
+
+This depends on the Pis agreeing about the time. `scripts/setup_pi.sh` turns on
+NTP for exactly this reason; if screens drift apart, check
+`timedatectl status` on each Pi before looking anywhere else, and see
+`scripts/test/server/sync.sh` for a measurement.
+
+**Rotation is per TV and takes effect immediately.** Use the dropdown on a tile
+for a screen that is physically mounted turned. It is remembered across reboots.
+Note that it rotates the picture, not the whole Pi display — and rotating
+landscape content on a landscape screen will letterbox it heavily, so portrait
+screens want portrait files.
 
 **A TV goes `Offline` after 30 seconds of silence.** Powering one back on
 brings it back within a poll or two — the agent re-registers itself on boot,

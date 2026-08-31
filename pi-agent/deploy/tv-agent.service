@@ -2,6 +2,11 @@
 Description=TV Agent
 After=network-online.target
 Wants=network-online.target
+# Synchronised playback is an agreement about wall-clock time: the server names
+# an instant and every TV releases its paused file at it. A Pi whose clock has
+# not been set yet would compute a start that is minutes out, so wait for NTP.
+After=time-sync.target
+Wants=time-sync.target
 
 [Service]
 ExecStart=/usr/local/bin/pi-agent

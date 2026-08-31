@@ -349,6 +349,29 @@ agent disappearing and reappearing — the tile goes offline and comes back.
 
 ## Troubleshooting
 
+**The TVs are not in sync with each other**
+
+Synchronised playback is an agreement about wall-clock time: the server names an
+instant and every TV releases its paused file at it. If the Pis disagree about
+what time it is, they cannot line up, and nothing in the logs will say so.
+
+```bash
+ssh pi@tv-01.local 'timedatectl status'   # want: System clock synchronized: yes
+```
+
+`scripts/setup_pi.sh` enables NTP, and `tv-agent.service` waits on
+`time-sync.target`, so a Pi provisioned by the script should be correct. A Pi
+imaged before this was added, or one on a network that blocks NTP, will not be.
+
+To measure rather than guess, with the fleet playing the same video:
+
+```bash
+./scripts/test/server/sync.sh <server-host>
+```
+
+Run it again after an hour of looping — that is what proves the drift correction
+is holding, rather than just that they started together.
+
 **A TV never appears on the dashboard**
 
 Check the agent is running and can see the server:

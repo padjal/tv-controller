@@ -64,7 +64,8 @@ async fn handle_play(
     // per-command ceiling, so the play that triggers a respawn may be reported
     // as failed even though mpv came up. The retry then succeeds.
     mpv.ensure_running().await?;
-    mpv.play(&cmd.url, cmd.video_id, cmd.kind).await?;
+    mpv.play(&cmd.url, cmd.video_id, cmd.kind, cmd.start_at_unix_ms)
+        .await?;
     Ok(Json(OkResponse { ok: true }))
 }
 

@@ -22,6 +22,14 @@ machine you control it from.
 
 - **Select any set of TVs** and play, pause, resume or stop them together
 - **Play on all** — one button, every TV that is online
+- **Images as well as video** — drop a JPEG, PNG or WebP in the same directory;
+  a still is held on screen until something replaces it
+- **Synchronised playback** — playing to several TVs starts them on a shared
+  clock and keeps them aligned, rather than whenever each finishes buffering
+- **Per-TV rotation** — 90/180/270 for screens that are physically mounted
+  turned, applied without a reboot
+- **An idle background** — pick a library image and stopped TVs show it instead
+  of a black screen
 - **A shared video library** — drop files in a directory; the server indexes
   them automatically and the agents stream them over HTTP
 - **Live status** — tiles update over Server-Sent Events as devices come and

@@ -283,6 +283,19 @@ esac
 sed "${SED_ARGS[@]}" \
     "$REPO_DIR/pi-agent/deploy/tv-agent.service" \
   > /etc/systemd/system/tv-agent.service
+# Synchronised playback across several TVs compares wall-clock time on each
+# Pi, so the fleet has to agree on it. Pi OS ships systemd-timesyncd and
+# usually has it on already; make it explicit rather than assumed, because the
+# failure mode is silent — playback simply never lines up, with nothing in the
+# logs to say why.
+if command -v timedatectl >/dev/null 2>&1; then
+  timedatectl set-ntp true 2>/dev/null \
+    && echo "Enabled NTP time sync (required for synchronised playback)" \
+    || echo "WARNING: could not enable NTP; synchronised playback needs a correct clock"
+else
+  echo "WARNING: timedatectl not found; ensure this Pi's clock is NTP-synced"
+fi
+
 systemctl daemon-reload
 echo "Installed /etc/systemd/system/tv-agent.service (not enabled yet)"
 
