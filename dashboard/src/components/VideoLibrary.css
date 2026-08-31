@@ -90,3 +90,30 @@
 .library__note--error {
   color: var(--danger);
 }
+
+.library__background {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.9rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+  font-size: 0.85rem;
+}
+
+.library__background select {
+  font: inherit;
+  flex: 1 1 8rem;
+  min-width: 0;
+  padding: 0.2rem 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 0.3rem;
+  background: var(--surface);
+  color: inherit;
+}
+
+.library__background-error {
+  flex-basis: 100%;
+  color: var(--danger, #b00);
+}

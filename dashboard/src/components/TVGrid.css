@@ -18,10 +18,6 @@
   border: 1px solid var(--line);
   border-radius: 0.6rem;
   background: var(--surface);
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
   /* Reserve the ring's width up front so selecting a tile does not reflow the
      grid. */
   outline: 2px solid transparent;
@@ -31,12 +27,52 @@
     border-color 120ms ease;
 }
 
+/* The selectable region. Everything except the rotation row toggles selection;
+   the control below is deliberately outside it. */
+.tv-tile__select {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
 .tv-tile:hover {
   border-color: var(--line-strong);
 }
 
-.tv-tile:focus-visible {
+.tv-tile:focus-within {
   outline-color: var(--focus);
+}
+
+.tv-tile__rotation {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.15rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line);
+  font-size: 0.8rem;
+  color: var(--muted, inherit);
+}
+
+.tv-tile__rotation select {
+  font: inherit;
+  padding: 0.1rem 0.2rem;
+  border: 1px solid var(--line);
+  border-radius: 0.3rem;
+  background: var(--surface);
+  color: inherit;
+}
+
+.tv-tile__rotation-error {
+  color: var(--danger, #b00);
 }
 
 .tv-tile--selected {

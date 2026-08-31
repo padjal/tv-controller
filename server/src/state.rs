@@ -206,6 +206,7 @@ mod tests {
             ip: "192.168.1.11".to_string(),
             state: shared::DeviceState::Playing,
             current_video: Some("clip.mp4".to_string()),
+            rotation: 0,
             last_seen: 1234,
         };
         s.broadcast(SseKind::DeviceUpdated, &device);

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { api, EVENTS_URL } from "../api";
 import { useSSE } from "../hooks/useSSE";
-import type { Video } from "../types";
+import type { Settings, Video } from "../types";
 import { Thumbnail } from "./Thumbnail";
 import { VideoPreview } from "./VideoPreview";
 import "./VideoLibrary.css";
@@ -50,8 +50,11 @@ export function VideoLibrary({ selectedVideoId, onSelect }: VideoLibraryProps) {
   const [videos, setVideos] = useState<Video[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [idleBackground, setIdleBackground] = useState<string | null>(null);
+  const [backgroundError, setBackgroundError] = useState<string | null>(null);
   // Radios need a shared name that is unique to this instance.
   const groupName = useId();
+  const backgroundId = useId();
 
   const refresh = useCallback(() => {
     api
@@ -66,6 +69,17 @@ export function VideoLibrary({ selectedVideoId, onSelect }: VideoLibraryProps) {
 
   useEffect(refresh, [refresh]);
 
+  const refreshSettings = useCallback(() => {
+    api
+      .getSettings()
+      .then((settings: Settings) => setIdleBackground(settings.idle_background))
+      // A failure here is not worth an error banner over the library: the
+      // picker simply shows "None" until the next successful read.
+      .catch(() => {});
+  }, []);
+
+  useEffect(refreshSettings, [refreshSettings]);
+
   useSSE(EVENTS_URL, {
     onEvent: (event) => {
       // The payload is only a count of what changed, so refetch rather than
@@ -73,8 +87,15 @@ export function VideoLibrary({ selectedVideoId, onSelect }: VideoLibraryProps) {
       if (event.kind === "VideoLibraryChanged") {
         refresh();
       }
+      // Another dashboard may have changed the fleet-wide background.
+      if (event.kind === "SettingsChanged") {
+        refreshSettings();
+      }
     },
-    onLagged: refresh,
+    onLagged: () => {
+      refresh();
+      refreshSettings();
+    },
   });
 
   // A selected file can be deleted from disk and pruned by the scanner. Left
@@ -155,6 +176,41 @@ export function VideoLibrary({ selectedVideoId, onSelect }: VideoLibraryProps) {
           ))}
         </ul>
       )}
+
+      {/* Fleet-wide, not per TV: one setting for the whole wall. Only images
+          are offered — a video would play once and stop, leaving the black
+          screen this exists to avoid, and the server rejects one anyway. */}
+      <div className="library__background">
+        <label htmlFor={backgroundId}>Idle background</label>
+        <select
+          id={backgroundId}
+          value={idleBackground ?? ""}
+          onChange={(event) => {
+            const filename = event.target.value === "" ? null : event.target.value;
+            const previous = idleBackground;
+            setIdleBackground(filename);
+            setBackgroundError(null);
+            api.setIdleBackground(filename).catch((cause: unknown) => {
+              setIdleBackground(previous);
+              setBackgroundError(cause instanceof Error ? cause.message : String(cause));
+            });
+          }}
+        >
+          <option value="">None (black screen)</option>
+          {videos
+            .filter((video) => video.kind === "Image")
+            .map((video) => (
+              <option key={video.id} value={video.filename}>
+                {video.filename}
+              </option>
+            ))}
+        </select>
+        {backgroundError && (
+          <span role="alert" className="library__background-error">
+            {backgroundError}
+          </span>
+        )}
+      </div>
     </section>
   );
 }

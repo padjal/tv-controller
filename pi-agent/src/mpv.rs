@@ -43,6 +43,22 @@ pub struct MpvClient {
     /// A `std::sync::Mutex` rather than tokio's: it is only ever held for a
     /// read or a write of one `Option`, never across an await.
     current_video_id: Mutex<Option<Uuid>>,
+    /// Display rotation in degrees, remembered so it can be re-applied.
+    ///
+    /// `video-rotate` is a global mpv property that survives across files, but
+    /// not across an mpv *process* — and `ensure_running` respawns mpv
+    /// whenever it has died. Without a local copy, a TV that lost its mpv
+    /// would come back unrotated and stay that way until someone touched the
+    /// dashboard.
+    rotation: Mutex<u16>,
+    /// URL of the image to display when nothing is playing, if any.
+    idle_background: Mutex<Option<String>>,
+    /// Whether that image is what is currently on screen.
+    ///
+    /// mpv cannot tell us this: showing the idle background means a file *is*
+    /// loaded, so `idle-active` reports false and the device would look like
+    /// it were playing. This flag is what keeps a stopped TV reading as Idle.
+    showing_idle_background: Mutex<bool>,
 }
 
 impl MpvClient {
@@ -51,6 +67,9 @@ impl MpvClient {
             socket_path: socket_path.into(),
             ipc_timeout: IPC_TIMEOUT,
             current_video_id: Mutex::new(None),
+            rotation: Mutex::new(0),
+            idle_background: Mutex::new(None),
+            showing_idle_background: Mutex::new(false),
         }
     }
 
@@ -62,6 +81,9 @@ impl MpvClient {
             socket_path: socket_path.into(),
             ipc_timeout,
             current_video_id: Mutex::new(None),
+            rotation: Mutex::new(0),
+            idle_background: Mutex::new(None),
+            showing_idle_background: Mutex::new(false),
         }
     }
 
@@ -212,6 +234,11 @@ impl MpvClient {
     /// still loaded resumes *that* file for the moment before `loadfile`
     /// replaces it, flashing the old content onto the screen.
     pub async fn play(&self, url: &str, video_id: Uuid, kind: MediaKind) -> Result<()> {
+        // Re-applied on every play rather than only when it is set. mpv keeps
+        // `video-rotate` across files but not across processes, and
+        // `ensure_running` respawns mpv after a crash — this is what makes a
+        // recovered TV come back the right way up.
+        self.apply_rotation().await?;
         self.set_loop_mode(kind).await?;
         self.send_command(serde_json::json!({"command": ["loadfile", url, "replace"]}))
             .await?;
@@ -221,14 +248,113 @@ impl MpvClient {
         // we failed to load would put a title on the dashboard for a TV that
         // is showing nothing.
         *self.current_video_id.lock().expect("video id lock poisoned") = Some(video_id);
+        self.set_showing_idle_background(false);
         Ok(())
     }
 
+    /// Stop playback, falling back to the idle background if one is set.
+    ///
+    /// A bare `stop` leaves mpv idle on a black screen. Where the client has
+    /// chosen artwork, a stopped TV should show that instead — a wall of black
+    /// rectangles during business hours looks like a fleet of broken screens.
     pub async fn stop(&self) -> Result<()> {
         self.send_command(serde_json::json!({"command": ["stop"]})).await?;
         // pause/resume deliberately leave this alone — only stop and playing
         // something else change what is on screen.
         *self.current_video_id.lock().expect("video id lock poisoned") = None;
+        self.set_showing_idle_background(false);
+
+        // Best-effort: failing to paint the background must not turn a
+        // successful stop into a failed command. The TV is already stopped.
+        if let Err(err) = self.show_idle_background().await {
+            tracing::warn!("could not show idle background after stop: {err:#}");
+        }
+        Ok(())
+    }
+
+    /// Load the idle background, if one is configured. A no-op otherwise.
+    pub async fn show_idle_background(&self) -> Result<()> {
+        let Some(url) = self.idle_background() else {
+            return Ok(());
+        };
+
+        self.apply_rotation().await?;
+        self.set_loop_mode(MediaKind::Image).await?;
+        self.send_command(serde_json::json!({"command": ["loadfile", url, "replace"]}))
+            .await?;
+        self.send_command(serde_json::json!({"command": ["set_property", "pause", false]}))
+            .await?;
+
+        // Set only after the load succeeded: claiming the background is up
+        // when it is not would report a black TV as a deliberately idle one.
+        self.set_showing_idle_background(true);
+        Ok(())
+    }
+
+    /// Change the idle background and, if the TV is idle, show it immediately.
+    pub async fn set_idle_background(&self, url: Option<String>) -> Result<()> {
+        let was_showing = self.is_showing_idle_background();
+        *self.idle_background.lock().expect("idle background lock poisoned") = url.clone();
+
+        match url {
+            // Repaint only when the screen is already idle. Doing it while a
+            // video is playing would yank the content off a live TV.
+            Some(_) if was_showing || self.current_video_id().is_none() => {
+                self.show_idle_background().await
+            }
+            // Cleared while it is the thing on screen: nothing to fall back
+            // to but a black screen, which is what `stop` used to leave.
+            None if was_showing => {
+                self.send_command(serde_json::json!({"command": ["stop"]})).await?;
+                self.set_showing_idle_background(false);
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    pub fn idle_background(&self) -> Option<String> {
+        self.idle_background
+            .lock()
+            .expect("idle background lock poisoned")
+            .clone()
+    }
+
+    fn current_video_id(&self) -> Option<Uuid> {
+        *self.current_video_id.lock().expect("video id lock poisoned")
+    }
+
+    fn is_showing_idle_background(&self) -> bool {
+        *self
+            .showing_idle_background
+            .lock()
+            .expect("idle background flag lock poisoned")
+    }
+
+    fn set_showing_idle_background(&self, showing: bool) {
+        *self
+            .showing_idle_background
+            .lock()
+            .expect("idle background flag lock poisoned") = showing;
+    }
+
+    /// Remember a rotation and apply it now.
+    pub async fn set_rotation(&self, degrees: u16) -> Result<()> {
+        *self.rotation.lock().expect("rotation lock poisoned") = degrees;
+        self.apply_rotation().await
+    }
+
+    pub fn rotation(&self) -> u16 {
+        *self.rotation.lock().expect("rotation lock poisoned")
+    }
+
+    /// Push the remembered rotation into mpv.
+    async fn apply_rotation(&self) -> Result<()> {
+        let degrees = self.rotation();
+        self.send_command(
+            serde_json::json!({"command": ["set_property", "video-rotate", degrees]}),
+        )
+        .await?;
         Ok(())
     }
 
@@ -268,7 +394,13 @@ impl MpvClient {
             .ok()
             .and_then(|v| v.as_f64());
 
-        let state = if idle {
+        // Showing the idle background means a file is loaded, so mpv reports
+        // `idle-active` false and every stopped TV would come back as Playing
+        // — with the background image's own runtime on the tile. The agent's
+        // own flag is the authority here, not mpv.
+        let showing_background = self.is_showing_idle_background();
+
+        let state = if idle || showing_background {
             DeviceState::Idle
         } else if paused {
             DeviceState::Paused
@@ -282,6 +414,11 @@ impl MpvClient {
         // would leave a title on a tile showing nothing.
         let current_video_id = if idle {
             *self.current_video_id.lock().expect("video id lock poisoned") = None;
+            self.set_showing_idle_background(false);
+            None
+        } else if showing_background {
+            // The background is not a library selection; reporting it would
+            // put artwork's filename on the tile as if it were playing.
             None
         } else {
             *self.current_video_id.lock().expect("video id lock poisoned")
@@ -290,8 +427,8 @@ impl MpvClient {
         Ok(AgentStatus {
             state,
             current_video_id,
-            position_secs,
-            duration_secs,
+            position_secs: if showing_background { None } else { position_secs },
+            duration_secs: if showing_background { None } else { duration_secs },
         })
     }
 }
@@ -432,6 +569,133 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_tv_showing_the_idle_background_still_reports_idle() {
+        let path = socket_path("idlebg");
+        // mpv reports a file loaded and not paused — which on its own reads as
+        // Playing, because the background *is* a loaded file.
+        let _seen = fake_mpv(
+            path.clone(),
+            serde_json::json!({"idle-active": false, "pause": false, "time-pos": 3.0, "duration": 9.0}),
+        );
+
+        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        client
+            .set_idle_background(Some("http://server:8000/videos/logo.png".into()))
+            .await
+            .unwrap();
+
+        let status = client.get_status().await.unwrap();
+        assert_eq!(
+            status.state,
+            DeviceState::Idle,
+            "a stopped TV showing artwork is idle, not playing"
+        );
+        assert_eq!(status.current_video_id, None);
+        assert_eq!(
+            status.position_secs, None,
+            "the background's playhead is not a video position"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_falls_back_to_the_idle_background() {
+        let path = socket_path("stopbg");
+        let seen = fake_mpv(path.clone(), serde_json::json!({}));
+
+        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        client
+            .set_idle_background(Some("http://server:8000/videos/logo.png".into()))
+            .await
+            .unwrap();
+        seen.lock().unwrap().clear();
+
+        client.stop().await.unwrap();
+
+        let commands = seen.lock().unwrap().clone();
+        assert!(
+            commands.contains(&serde_json::json!([
+                "loadfile",
+                "http://server:8000/videos/logo.png",
+                "replace"
+            ])),
+            "stop should leave the client's artwork on screen, not a black rectangle: {commands:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_without_a_background_configured_just_stops() {
+        let path = socket_path("stopplain");
+        let seen = fake_mpv(path.clone(), serde_json::json!({}));
+
+        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        client.stop().await.unwrap();
+
+        assert_eq!(
+            seen.lock().unwrap().clone(),
+            vec![serde_json::json!(["stop"])],
+            "with nothing configured, stop must not load anything"
+        );
+    }
+
+    #[tokio::test]
+    async fn playing_something_clears_the_idle_background_flag() {
+        let path = socket_path("bgthenplay");
+        let _seen = fake_mpv(
+            path.clone(),
+            serde_json::json!({"idle-active": false, "pause": false, "time-pos": 2.0, "duration": 30.0}),
+        );
+
+        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        client
+            .set_idle_background(Some("http://server:8000/videos/logo.png".into()))
+            .await
+            .unwrap();
+        client
+            .play(
+                "http://server:8000/videos/promo.mp4",
+                Uuid::new_v4(),
+                MediaKind::Video,
+            )
+            .await
+            .unwrap();
+
+        let status = client.get_status().await.unwrap();
+        assert_eq!(
+            status.state,
+            DeviceState::Playing,
+            "the background flag must not survive a real play"
+        );
+        assert_eq!(status.position_secs, Some(2.0));
+    }
+
+    #[tokio::test]
+    async fn rotation_is_reapplied_on_every_play() {
+        let path = socket_path("rotplay");
+        let seen = fake_mpv(path.clone(), serde_json::json!({}));
+
+        let client = MpvClient::with_ipc_timeout(&path, Duration::from_secs(5));
+        client.set_rotation(90).await.unwrap();
+        seen.lock().unwrap().clear();
+
+        client
+            .play(
+                "http://server:8000/videos/promo.mp4",
+                Uuid::new_v4(),
+                MediaKind::Video,
+            )
+            .await
+            .unwrap();
+
+        // mpv keeps video-rotate across files but not across processes, and
+        // ensure_running respawns it after a crash — so a play that follows a
+        // respawn has to set it again or the TV comes back the wrong way up.
+        assert_eq!(
+            seen.lock().unwrap().first(),
+            Some(&serde_json::json!(["set_property", "video-rotate", 90])),
+        );
+    }
+
+    #[tokio::test]
     async fn play_holds_an_image_instead_of_looping_it() {
         let path = socket_path("image");
         let seen = fake_mpv(path.clone(), serde_json::json!({}));
@@ -450,6 +714,7 @@ mod tests {
         assert_eq!(
             commands,
             vec![
+                serde_json::json!(["set_property", "video-rotate", 0]),
                 serde_json::json!(["set_property", "loop-file", "no"]),
                 serde_json::json!(["set_property", "image-display-duration", "inf"]),
                 serde_json::json!(["loadfile", "http://server:8000/videos/logo.png", "replace"]),
@@ -479,6 +744,7 @@ mod tests {
         assert_eq!(
             commands,
             vec![
+                serde_json::json!(["set_property", "video-rotate", 0]),
                 serde_json::json!(["set_property", "loop-file", "inf"]),
                 serde_json::json!(["set_property", "image-display-duration", 1.0]),
                 serde_json::json!(["loadfile", "http://server:8000/videos/promo.mp4", "replace"]),

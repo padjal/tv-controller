@@ -75,6 +75,22 @@ pub async fn fan_out_resume(devices: &[Device], client: &reqwest::Client) -> Fan
     fan_out_post(devices, "resume", &empty_body(), client).await
 }
 
+pub async fn fan_out_rotation(
+    devices: &[Device],
+    command: &shared::RotationCommand,
+    client: &reqwest::Client,
+) -> FanOutResults {
+    fan_out_post(devices, "rotation", command, client).await
+}
+
+pub async fn fan_out_idle_background(
+    devices: &[Device],
+    command: &shared::IdleBackgroundCommand,
+    client: &reqwest::Client,
+) -> FanOutResults {
+    fan_out_post(devices, "idle-background", command, client).await
+}
+
 /// The agent's stop/pause/resume handlers take a body but ignore it.
 fn empty_body() -> serde_json::Value {
     serde_json::json!({})
@@ -168,6 +184,7 @@ mod tests {
             ip: ip.to_string(),
             state,
             current_video: None,
+            rotation: 0,
             last_seen: 0,
         }
     }

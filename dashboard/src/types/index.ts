@@ -10,6 +10,8 @@ export type { MediaKind } from "./MediaKind";
 export type { PlayCommand } from "./PlayCommand";
 export type { PlaybackRequest } from "./PlaybackRequest";
 export type { RegisterRequest } from "./RegisterRequest";
+export type { RotationRequest } from "./RotationRequest";
+export type { Settings } from "./Settings";
 export type { SseEvent } from "./SseEvent";
 export type { SseKind } from "./SseKind";
 export type { StopRequest } from "./StopRequest";

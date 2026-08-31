@@ -12,6 +12,8 @@ pub struct Device {
     pub ip: String,
     pub state: DeviceState,
     pub current_video: Option<String>,
+    /// Display rotation in degrees clockwise: 0, 90, 180 or 270.
+    pub rotation: u16,
     // Unix timestamp. Serialized as a JSON number, so the generated TS must
     // say `number` — ts-rs maps i64 to `bigint` by default, which JSON.parse
     // never produces.
@@ -122,6 +124,48 @@ pub struct StopRequest {
     pub device_ids: Vec<Uuid>,
 }
 
+/// `POST /rotation` on the agent — set mpv's display rotation.
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../dashboard/src/types/")]
+pub struct RotationCommand {
+    pub degrees: u16,
+}
+
+/// `PUT /api/devices/:id/rotation` on the server.
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../dashboard/src/types/")]
+pub struct RotationRequest {
+    pub rotation: u16,
+}
+
+/// The rotations a TV can be mounted at. Anything else is rejected rather than
+/// passed to mpv, which would silently accept e.g. 45 and shear the picture.
+pub const ALLOWED_ROTATIONS: [u16; 4] = [0, 90, 180, 270];
+
+/// `POST /idle-background` on the agent — what to show when nothing is playing.
+/// `None` clears it back to a black screen.
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../dashboard/src/types/")]
+pub struct IdleBackgroundCommand {
+    pub url: Option<String>,
+}
+
+/// Fleet-wide settings, `GET`/`PUT /api/settings`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../dashboard/src/types/")]
+pub struct Settings {
+    /// Filename of a library image shown on idle TVs, or `None` for black.
+    pub idle_background: Option<String>,
+    /// The same file as an absolute URL, filled in by the server on read.
+    ///
+    /// Agents need a URL and only the server can build one — it owns the base
+    /// address and the percent-encoding that a library full of spaces and `#`
+    /// requires. Ignored on write; `serde(default)` so a client can PUT the
+    /// filename alone.
+    #[serde(default)]
+    pub idle_background_url: Option<String>,
+}
+
 // ── Agent status (Pi → server) ────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, TS)]
@@ -159,4 +203,5 @@ pub enum SseKind {
     DeviceUpdated,
     DeviceOffline,
     VideoLibraryChanged,
+    SettingsChanged,
 }

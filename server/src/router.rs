@@ -4,11 +4,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use tower_http::services::{ServeDir, ServeFile};
 
-use crate::handlers::{devices, playback, sse, videos};
+use crate::handlers::{devices, playback, settings, sse, videos};
 use crate::state::AppState;
 
 /// The whole application. `main` and the handler tests both build from here, so
@@ -50,6 +50,9 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/devices", get(devices::list))
         .route("/devices/:id", get(devices::get_one))
         .route("/devices/:id", delete(devices::delete_one))
+        .route("/devices/:id/rotation", put(devices::set_rotation))
+        .route("/settings", get(settings::get))
+        .route("/settings", put(settings::put))
         .route("/videos", get(videos::list))
         .route("/videos/:id", get(videos::get_one))
         .route("/playback/play", post(playback::play))

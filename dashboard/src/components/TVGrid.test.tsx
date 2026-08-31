@@ -7,10 +7,11 @@ import type { Device } from "../types";
 
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
-  return { ...actual, api: { ...actual.api, getDevices: vi.fn() } };
+  return { ...actual, api: { ...actual.api, getDevices: vi.fn(), setRotation: vi.fn() } };
 });
 
 const getDevices = vi.mocked(api.getDevices);
+const setRotation = vi.mocked(api.setRotation);
 
 function device(overrides: Partial<Device> & { name: string }): Device {
   return {
@@ -18,6 +19,7 @@ function device(overrides: Partial<Device> & { name: string }): Device {
     ip: "10.0.0.1",
     state: "Idle",
     current_video: null,
+    rotation: 0,
     last_seen: Math.floor(Date.now() / 1000),
     ...overrides,
   };
@@ -35,6 +37,10 @@ const tiles = () => within(screen.getByRole("list", { name: "TVs" })).getAllByRo
 beforeEach(() => {
   installFakeEventSource();
   getDevices.mockReset();
+  setRotation.mockReset();
+  setRotation.mockImplementation((id, rotation) =>
+    Promise.resolve(device({ name: id, id, rotation })),
+  );
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -238,5 +244,75 @@ describe("formatLastSeen", () => {
   it("never reports a negative age when clocks disagree", () => {
     // The Pi and the server need not agree to the second.
     expect(formatLastSeen(now / 1000 + 30, now)).toBe("0s ago");
+  });
+});
+
+describe("rotation", () => {
+  it("offers the four right angles and shows the device's current one", async () => {
+    getDevices.mockResolvedValue([device({ name: "Lobby", rotation: 90 })]);
+    renderGrid();
+
+    const select = await screen.findByLabelText("Rotation");
+    expect(select).toHaveValue("90");
+    expect(within(select as HTMLElement).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "0°",
+      "90°",
+      "180°",
+      "270°",
+    ]);
+  });
+
+  it("sends the new angle to the server", async () => {
+    getDevices.mockResolvedValue([device({ name: "Lobby", id: "d1" })]);
+    renderGrid();
+
+    const select = await screen.findByLabelText("Rotation");
+    await act(async () => {
+      (select as HTMLSelectElement).value = "270";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(setRotation).toHaveBeenCalledWith("d1", 270);
+  });
+
+  it("does not toggle selection when the rotation control is used", async () => {
+    // The tile used to be one big <button>; a <select> inside it would have
+    // bubbled every click into the selection toggle.
+    getDevices.mockResolvedValue([device({ name: "Lobby", id: "d1" })]);
+    const { onToggle } = renderGrid();
+
+    const select = await screen.findByLabelText("Rotation");
+    await act(async () => {
+      (select as HTMLSelectElement).value = "180";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(onToggle).not.toHaveBeenCalled();
+  });
+
+  it("rolls back to the stored angle when the server refuses", async () => {
+    getDevices.mockResolvedValue([device({ name: "Lobby", id: "d1", rotation: 0 })]);
+    setRotation.mockRejectedValue(new Error("TV unreachable"));
+    renderGrid();
+
+    const select = await screen.findByLabelText("Rotation");
+    await act(async () => {
+      (select as HTMLSelectElement).value = "90";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    // Showing 90° for a TV the server still has at 0° would be a lie the
+    // operator only discovers by reloading.
+    await waitFor(() => expect(select).toHaveValue("0"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("failed");
+  });
+
+  it("still lets the tile itself be selected", async () => {
+    getDevices.mockResolvedValue([device({ name: "Lobby", id: "d1" })]);
+    const { onToggle } = renderGrid();
+
+    const tile = (await screen.findByText("Lobby")).closest("button");
+    act(() => tile!.click());
+    expect(onToggle).toHaveBeenCalledWith("d1");
   });
 });

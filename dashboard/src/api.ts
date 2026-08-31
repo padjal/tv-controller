@@ -1,4 +1,4 @@
-import type { Device, PlaybackRequest, StopRequest, Video } from "./types";
+import type { Device, PlaybackRequest, RotationRequest, Settings, StopRequest, Video } from "./types";
 
 /** Same origin: the Rust server serves this bundle and the API. */
 const BASE = "";
@@ -136,4 +136,33 @@ export const api = {
   pause: (body: StopRequest): Promise<PlaybackResult> => postCommand("/api/playback/pause", body),
 
   resume: (body: StopRequest): Promise<PlaybackResult> => postCommand("/api/playback/resume", body),
+
+  /// Turn a TV's picture to match how it is physically mounted. Returns the
+  /// updated device rather than a PlaybackResult — it targets exactly one TV,
+  /// so there is no per-device success/failure list to report.
+  setRotation: async (id: string, rotation: number): Promise<Device> => {
+    const response = await fetch(`${BASE}/api/devices/${encodeURIComponent(id)}/rotation`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rotation } satisfies RotationRequest),
+    });
+    if (!response.ok) {
+      throw new ApiError(response.status, await errorMessage(response));
+    }
+    return (await response.json()) as Device;
+  },
+
+  getSettings: (): Promise<Settings> => getJson<Settings>("/api/settings"),
+
+  setIdleBackground: async (filename: string | null): Promise<Settings> => {
+    const response = await fetch(`${BASE}/api/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idle_background: filename }),
+    });
+    if (!response.ok) {
+      throw new ApiError(response.status, await errorMessage(response));
+    }
+    return (await response.json()) as Settings;
+  },
 };

@@ -7,7 +7,7 @@ use axum::{
     Json, Router,
 };
 use serde::Serialize;
-use shared::PlayCommand;
+use shared::{IdleBackgroundCommand, PlayCommand, RotationCommand, ALLOWED_ROTATIONS};
 use std::sync::Arc;
 
 type AppResult<T> = Result<Json<T>, AppError>;
@@ -44,6 +44,8 @@ pub fn build_router(mpv: Arc<MpvClient>) -> Router {
         .route("/stop", post(handle_stop))
         .route("/pause", post(handle_pause))
         .route("/resume", post(handle_resume))
+        .route("/rotation", post(handle_rotation))
+        .route("/idle-background", post(handle_idle_background))
         .route("/status", get(handle_status))
         .route("/health", get(handle_health))
         .with_state(mpv)
@@ -63,6 +65,35 @@ async fn handle_play(
     // as failed even though mpv came up. The retry then succeeds.
     mpv.ensure_running().await?;
     mpv.play(&cmd.url, cmd.video_id, cmd.kind).await?;
+    Ok(Json(OkResponse { ok: true }))
+}
+
+/// Set the display rotation. Rejected rather than forwarded if it is not one
+/// of the four right angles — mpv accepts arbitrary values for `video-rotate`
+/// and would happily shear the picture at, say, 45 degrees.
+async fn handle_rotation(
+    State(mpv): State<Arc<MpvClient>>,
+    Json(cmd): Json<RotationCommand>,
+) -> Result<Json<OkResponse>, AppError> {
+    if !ALLOWED_ROTATIONS.contains(&cmd.degrees) {
+        return Err(AppError(anyhow::anyhow!(
+            "rotation must be one of {ALLOWED_ROTATIONS:?}, got {}",
+            cmd.degrees
+        )));
+    }
+    // No `ensure_running` here: rotation is remembered locally and re-applied
+    // by the next play, so it is worth recording even while mpv is down.
+    mpv.set_rotation(cmd.degrees).await?;
+    Ok(Json(OkResponse { ok: true }))
+}
+
+/// Set (or clear) the image shown when nothing is playing.
+async fn handle_idle_background(
+    State(mpv): State<Arc<MpvClient>>,
+    Json(cmd): Json<IdleBackgroundCommand>,
+) -> AppResult<OkResponse> {
+    mpv.ensure_running().await?;
+    mpv.set_idle_background(cmd.url).await?;
     Ok(Json(OkResponse { ok: true }))
 }
 

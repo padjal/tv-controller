@@ -83,6 +83,7 @@ mod tests {
             ip: "10.0.0.1".to_string(),
             state: DeviceState::Playing,
             current_video: Some("clip.mp4".to_string()),
+            rotation: 0,
             last_seen: 42,
         }
     }

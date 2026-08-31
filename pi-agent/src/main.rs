@@ -1,5 +1,5 @@
 use anyhow::Result;
-use shared::RegisterRequest;
+use shared::{Device, RegisterRequest, Settings};
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -36,6 +36,9 @@ async fn main() -> Result<()> {
     let register_url = format!("{}/api/devices/register", config.server_url);
     let client = reqwest::Client::new();
 
+    let settings_url = format!("{}/api/settings", config.server_url);
+    let startup_mpv = Arc::clone(&mpv);
+
     // Registration runs in the background so the HTTP server is available immediately.
     tokio::spawn(async move {
         let mut delay = std::time::Duration::from_secs(1);
@@ -43,6 +46,12 @@ async fn main() -> Result<()> {
             match client.post(&register_url).json(&register_body).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     info!("registered with server");
+                    // The server is the authority on both of these and the
+                    // agent holds them only in memory, so they have to be
+                    // re-learned on every start. Without it a rebooted Pi
+                    // comes back unrotated, showing a black screen, and stays
+                    // that way until someone touches the dashboard.
+                    restore_device_settings(&startup_mpv, resp, &client, &settings_url).await;
                     break;
                 }
                 Ok(resp) => warn!("server returned {}, retrying", resp.status()),
@@ -58,6 +67,46 @@ async fn main() -> Result<()> {
     info!("listening on {addr}");
     axum::serve(listener, router::build_router(mpv)).await?;
     Ok(())
+}
+
+/// Re-apply the rotation and idle background the server holds for this device.
+///
+/// Best-effort throughout: a failure here must not stop the agent serving.
+/// Rotation comes from the register response, which is the device row itself;
+/// the idle background is fleet-wide and needs its own request.
+async fn restore_device_settings(
+    mpv: &Arc<mpv::MpvClient>,
+    resp: reqwest::Response,
+    client: &reqwest::Client,
+    settings_url: &str,
+) {
+    match resp.json::<Device>().await {
+        Ok(device) if device.rotation != 0 => {
+            if let Err(e) = mpv.set_rotation(device.rotation).await {
+                warn!("could not restore rotation {}: {e:#}", device.rotation);
+            } else {
+                info!("restored rotation {}", device.rotation);
+            }
+        }
+        Ok(_) => {}
+        Err(e) => warn!("could not read register response: {e}"),
+    }
+
+    match client.get(settings_url).send().await {
+        Ok(resp) => match resp.json::<Settings>().await {
+            Ok(settings) => {
+                if let Some(url) = settings.idle_background_url {
+                    if let Err(e) = mpv.set_idle_background(Some(url)).await {
+                        warn!("could not show idle background: {e:#}");
+                    } else {
+                        info!("restored idle background");
+                    }
+                }
+            }
+            Err(e) => warn!("could not read settings: {e}"),
+        },
+        Err(e) => warn!("could not fetch settings: {e}"),
+    }
 }
 
 fn get_local_ip() -> Option<String> {

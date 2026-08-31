@@ -24,6 +24,63 @@ function merge(devices: Device[], updated: Device): Device[] {
   );
 }
 
+const ROTATIONS = [0, 90, 180, 270] as const;
+
+/**
+ * Per-TV rotation, for screens that are physically mounted turned.
+ *
+ * Optimistic: the select shows the new angle immediately and rolls back if the
+ * server rejects it. The authoritative value arrives moments later as a
+ * DeviceUpdated event, which is what keeps other open dashboards in step.
+ */
+function RotationControl({ device }: { device: Device }) {
+  const [pending, setPending] = useState<number | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  // A newer value from the server supersedes whatever we were showing.
+  useEffect(() => {
+    setPending(null);
+  }, [device.rotation]);
+
+  const value = pending ?? device.rotation;
+
+  async function change(rotation: number) {
+    setPending(rotation);
+    setFailed(false);
+    try {
+      await api.setRotation(device.id, rotation);
+    } catch {
+      // The TV is unreachable or the value was refused; show what the server
+      // still holds rather than a rotation that never took.
+      setPending(null);
+      setFailed(true);
+    }
+  }
+
+  const id = `rotation-${device.id}`;
+  return (
+    <span className="tv-tile__rotation">
+      <label htmlFor={id}>Rotation</label>
+      <select
+        id={id}
+        value={value}
+        onChange={(event) => void change(Number(event.target.value))}
+      >
+        {ROTATIONS.map((degrees) => (
+          <option key={degrees} value={degrees}>
+            {degrees}°
+          </option>
+        ))}
+      </select>
+      {failed && (
+        <span role="alert" className="tv-tile__rotation-error">
+          failed
+        </span>
+      )}
+    </span>
+  );
+}
+
 const STATE_LABEL: Record<DeviceState, string> = {
   Idle: "Idle",
   Playing: "Playing",
@@ -104,12 +161,19 @@ export function TVGrid({ selectedIds, onToggle }: TVGridProps) {
       {devices.map((device) => {
         const selected = selectedIds.has(device.id);
         return (
-          <li key={device.id}>
-            {/* A button rather than a clickable div, so selection works from
-                the keyboard and screen readers announce the toggle state. */}
+          <li
+            key={device.id}
+            className={`tv-tile${selected ? " tv-tile--selected" : ""}`}
+          >
+            {/* The selectable region is a button rather than the whole tile:
+                selection has to work from the keyboard and be announced, but a
+                <select> cannot live inside a <button> — nested interactive
+                elements are invalid, and every click on the dropdown would
+                bubble into the toggle. So the tile is the container and the
+                rotation control is the button's sibling. */}
             <button
               type="button"
-              className={`tv-tile${selected ? " tv-tile--selected" : ""}`}
+              className="tv-tile__select"
               aria-pressed={selected}
               onClick={() => onToggle(device.id)}
             >
@@ -129,6 +193,7 @@ export function TVGrid({ selectedIds, onToggle }: TVGridProps) {
                   : (device.current_video ?? "—")}
               </span>
             </button>
+            <RotationControl device={device} />
           </li>
         );
       })}

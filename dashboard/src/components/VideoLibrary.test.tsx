@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VideoLibrary, formatDuration, formatSize } from "./VideoLibrary";
 import { api } from "../api";
@@ -7,10 +7,20 @@ import type { Video } from "../types";
 
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
-  return { ...actual, api: { ...actual.api, getVideos: vi.fn() } };
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      getVideos: vi.fn(),
+      getSettings: vi.fn(),
+      setIdleBackground: vi.fn(),
+    },
+  };
 });
 
 const getVideos = vi.mocked(api.getVideos);
+const getSettings = vi.mocked(api.getSettings);
+const setIdleBackground = vi.mocked(api.setIdleBackground);
 
 function video(overrides: Partial<Video> & { filename: string }): Video {
   return {
@@ -34,6 +44,12 @@ beforeEach(() => {
   installFakeEventSource();
   getVideos.mockReset();
   vi.spyOn(console, "warn").mockImplementation(() => {});
+  getSettings.mockReset();
+  getSettings.mockResolvedValue({ idle_background: null, idle_background_url: null });
+  setIdleBackground.mockReset();
+  setIdleBackground.mockImplementation((filename) =>
+    Promise.resolve({ idle_background: filename, idle_background_url: null }),
+  );
 });
 
 afterEach(() => {
@@ -239,5 +255,80 @@ describe("selection is not cleared spuriously", () => {
 
     await screen.findByRole("alert");
     expect(onSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe("idle background", () => {
+  it("offers only images, never videos", async () => {
+    // A video would play once and stop, leaving the black screen the setting
+    // exists to avoid — the server rejects one, so it must not be offered.
+    getVideos.mockResolvedValue([
+      video({ filename: "clip.mp4" }),
+      video({ filename: "logo.png", kind: "Image", duration_secs: null }),
+    ]);
+    renderLibrary();
+
+    const select = await screen.findByLabelText("Idle background");
+    const options = within(select as HTMLElement)
+      .getAllByRole("option")
+      .map((option) => option.textContent);
+    expect(options).toEqual(["None (black screen)", "logo.png"]);
+  });
+
+  it("shows the background the server already holds", async () => {
+    getVideos.mockResolvedValue([video({ filename: "logo.png", kind: "Image" })]);
+    getSettings.mockResolvedValue({
+      idle_background: "logo.png",
+      idle_background_url: "/videos/logo.png",
+    });
+    renderLibrary();
+
+    await waitFor(() => expect(screen.getByLabelText("Idle background")).toHaveValue("logo.png"));
+  });
+
+  it("saves a chosen background", async () => {
+    getVideos.mockResolvedValue([video({ filename: "logo.png", kind: "Image" })]);
+    renderLibrary();
+
+    const select = await screen.findByLabelText("Idle background");
+    await act(async () => {
+      (select as HTMLSelectElement).value = "logo.png";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(setIdleBackground).toHaveBeenCalledWith("logo.png");
+  });
+
+  it("clears back to a black screen", async () => {
+    getVideos.mockResolvedValue([video({ filename: "logo.png", kind: "Image" })]);
+    getSettings.mockResolvedValue({
+      idle_background: "logo.png",
+      idle_background_url: "/videos/logo.png",
+    });
+    renderLibrary();
+
+    const select = await screen.findByLabelText("Idle background");
+    await waitFor(() => expect(select).toHaveValue("logo.png"));
+    await act(async () => {
+      (select as HTMLSelectElement).value = "";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(setIdleBackground).toHaveBeenCalledWith(null);
+  });
+
+  it("rolls back and explains when the server refuses", async () => {
+    getVideos.mockResolvedValue([video({ filename: "logo.png", kind: "Image" })]);
+    setIdleBackground.mockRejectedValue(new Error("no library file named logo.png"));
+    renderLibrary();
+
+    const select = await screen.findByLabelText("Idle background");
+    await act(async () => {
+      (select as HTMLSelectElement).value = "logo.png";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    await waitFor(() => expect(select).toHaveValue(""));
+    expect(await screen.findByRole("alert")).toHaveTextContent("no library file named logo.png");
   });
 });

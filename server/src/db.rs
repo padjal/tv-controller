@@ -43,7 +43,9 @@ pub async fn connect(database_url: &str) -> Result<Db> {
 
 /// Insert a newly-registered device, or update its name/ip/last_seen if it
 /// already exists. Registration never clobbers live playback state, so `state`
-/// and `current_video` are left untouched on conflict.
+/// and `current_video` are left untouched on conflict — and neither is
+/// `rotation`, which is a physical property of how the TV is mounted and must
+/// survive the agent restarting.
 pub async fn upsert_device(db: &Db, req: &RegisterRequest) -> Result<Device> {
     let now = current_unix();
     sqlx::query(
@@ -70,7 +72,7 @@ pub async fn upsert_device(db: &Db, req: &RegisterRequest) -> Result<Device> {
 /// List all known devices, ordered by name for a stable dashboard layout.
 pub async fn list_devices(db: &Db) -> Result<Vec<Device>> {
     let rows = sqlx::query(
-        "SELECT id, name, ip, state, current_video, last_seen
+        "SELECT id, name, ip, state, current_video, rotation, last_seen
          FROM devices
          ORDER BY name",
     )
@@ -84,7 +86,7 @@ pub async fn list_devices(db: &Db) -> Result<Vec<Device>> {
 /// Fetch a single device by id, or `None` if it is not registered.
 pub async fn get_device(db: &Db, id: Uuid) -> Result<Option<Device>> {
     let row = sqlx::query(
-        "SELECT id, name, ip, state, current_video, last_seen
+        "SELECT id, name, ip, state, current_video, rotation, last_seen
          FROM devices
          WHERE id = ?1",
     )
@@ -131,6 +133,49 @@ pub async fn delete_device(db: &Db, id: Uuid) -> Result<bool> {
 
     Ok(res.rows_affected() > 0)
 }
+
+/// Set a device's display rotation. Returns `false` if no such device.
+pub async fn update_device_rotation(db: &Db, id: Uuid, rotation: u16) -> Result<bool> {
+    let res = sqlx::query("UPDATE devices SET rotation = ?2 WHERE id = ?1")
+        .bind(id.to_string())
+        .bind(i64::from(rotation))
+        .execute(db)
+        .await
+        .context("failed to update device rotation")?;
+
+    Ok(res.rows_affected() > 0)
+}
+
+// ── Settings ───────────────────────────────────────────────────────────────────
+
+/// Read one setting, or `None` if it has never been set.
+pub async fn get_setting(db: &Db, key: &str) -> Result<Option<String>> {
+    let row: Option<(Option<String>,)> = sqlx::query_as("SELECT value FROM settings WHERE key = ?1")
+        .bind(key)
+        .fetch_optional(db)
+        .await
+        .context("failed to read setting")?;
+
+    Ok(row.and_then(|(value,)| value))
+}
+
+/// Write one setting. `None` stores a NULL, which reads back as `None`.
+pub async fn set_setting(db: &Db, key: &str, value: Option<&str>) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = ?2",
+    )
+    .bind(key)
+    .bind(value)
+    .execute(db)
+    .await
+    .context("failed to write setting")?;
+
+    Ok(())
+}
+
+/// The one setting there is so far: which library image idle TVs display.
+pub const IDLE_BACKGROUND: &str = "idle_background";
 
 // ── Videos ─────────────────────────────────────────────────────────────────────
 
@@ -263,6 +308,7 @@ fn row_to_device(row: SqliteRow) -> Result<Device> {
         ip: row.try_get("ip")?,
         state: state_from_str(&state),
         current_video: row.try_get("current_video")?,
+        rotation: row.try_get::<i64, _>("rotation")? as u16,
         last_seen: row.try_get("last_seen")?,
     })
 }
