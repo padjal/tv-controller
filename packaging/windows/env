@@ -1,0 +1,12 @@
+# Server settings. Edit this file, then start the server.
+
+# Required. The address the Raspberry Pis use to reach THIS PC: its LAN IP
+# (run `ipconfig`) and port 8000. Not localhost — it is baked into the video
+# URLs sent to the Pis. Remove the leading # and put in the real IP:
+# SERVER_BASE_URL=http://192.168.1.50:8000
+
+PORT=8000
+RUST_LOG=info
+
+# Plain log lines, so server.log has no colour escape codes in it.
+NO_COLOR=1

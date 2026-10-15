@@ -78,6 +78,24 @@ the files still index and play, they just show no duration.
 
 The server handles `SIGTERM`, so it is safe under systemd or `docker stop`.
 
+### On Windows, without Docker
+
+Download `tv-controller-server-<version>-windows-x64.zip` from the GitHub
+releases page, unzip it (e.g. to `C:\tv-controller`), and follow the
+`README.txt` inside: set `SERVER_BASE_URL` in `.env`, open port 8000 in the
+firewall, and register the scheduled task it gives. That task starts the server
+at boot as `SYSTEM`, with nobody signed in — which Docker Desktop cannot do —
+and restarts it if it exits.
+
+ffmpeg is not bundled. Copy `ffmpeg.exe` and `ffprobe.exe` next to `server.exe`
+rather than installing onto `PATH`: a per-user `PATH` entry (what `winget`
+writes) is invisible to a task running as `SYSTEM`, and Rust's process spawning
+on Windows searches the executable's own directory first.
+
+The zip is built on a Mac or Linux workstation by `scripts/package_windows.sh`,
+which cross-compiles with MinGW. The resulting exe links only Windows system
+DLLs, so nothing else needs installing.
+
 ---
 
 ## Setting up the first Pi
